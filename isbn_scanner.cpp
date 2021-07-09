@@ -5,6 +5,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <unordered_set>
 
 #include "ctre.hpp"
 //#include "fmt/core.h"
@@ -14,20 +15,27 @@
 #include "taskflow/taskflow.hpp"
 
 static const char usage[] =
-    R"(Usage: isbn_scanner [-hdo OUTPUT_DIR] [--version] [--verbose]
+    R"(Usage: isbn_scanner [-hdmo OUTPUT_DIR] [--version] [--verbose]
 
 -h --help       show this message
 -d --debug      show debug output
+-m --move       move files instead of copy
 -o OUTPUT_DIR   directory to put organized files in
 --verbose       show more output
 )";
 
 static const char version[] = "ISBN Scanner v0.1";
 
-static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-]{10,13})"};
+static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-]{9,15}[0-9X])"};
 
 static std::string tika_url = "http://localhost:9998";
 static std::string worldcat_url = "http://classify.oclc.org/classify2/Classify";
+
+static std::unordered_set<u_char> author_filter_chars = {
+  ',',
+  '.',
+  ' '
+};
 
 #define u_char unsigned char
 
@@ -60,7 +68,14 @@ std::vector<u_char> read_file_bytes(std::string &fn) {
 
 constexpr int ctoi(char c) noexcept { return c - '0'; }
 
-bool is_valid_isbn(std::string &isbn) {
+bool is_valid_isbn(std::string isbn) {
+  std::transform(isbn.begin(), isbn.end(), isbn.begin(), [](u_char c) {
+    if ((c > '9' || c < '0') && c != 'X') {
+      return '';
+    }
+    return c;
+  });
+
   if (isbn.length() == 10) {
     int multiplier = 1;
     int sum = 0;
@@ -142,7 +157,9 @@ std::map<std::string, std::string> get_isbn_info(std::string &isbn) {
     return {};
   }
 
-  auto book_info = std::map<std::string, std::string>{};
+  auto book_info = std::map<std::string, std::string>{
+    {"isbn", isbn}
+  };
 
   for (auto node : doc.children()) {
     if (node.name() == std::string{"classify"}) {
@@ -161,7 +178,35 @@ std::map<std::string, std::string> get_isbn_info(std::string &isbn) {
 
 void move_file(std::string &fn, std::map<std::string, std::string> &&fileinfo,
                std::map<std::string, docopt::value> &args) {
-  std::cout << fn << fileinfo.at("author") << args.at("verbose");
+  auto author = fileinfo.at("author");
+  std::transform(author.begin(), author.end(), author.begin(), [](u_char c) {
+    if (author_filter_chars.contains(c)) {
+      return '_';
+    }
+    return std::tolower(c);
+  });
+
+  auto new_fn = fmt::format("{}_{}_{}", fileinfo.at("isbn"), author, fileinfo.at("title"));
+
+  std::string operation = "dry ran";
+  std::filesystem::path target {};
+
+  if (!args.at("--dry-run")) {
+    std::string output_dir = std::get<std::string>(args.at("-o"));
+    std::filesystem::path target_dir {};
+    std::filesystem::path target_file {new_fn};
+    target = target_dir / target_file;
+    std::filesystem::copy(fn, target);
+    if (args.at("--move")) {
+      std::filesystem::remove(fn);
+      operation = "moved";
+    } else {
+      operation = "copied";
+    }
+  }
+
+  spdlog::info("{} file {} to {}", operation, fn, target.string());
+  return;
 }
 
 void process_file(std::string &fn, std::map<std::string, docopt::value> &args) {
@@ -182,6 +227,7 @@ void process_file(std::string &fn, std::map<std::string, docopt::value> &args) {
       auto fileinfo = get_isbn_info(isbn);
 
       if (fileinfo.empty()) {
+        spdlog::debug("couldn't find any info for file {}", fn);
         continue;
       }
 
