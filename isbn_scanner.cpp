@@ -2,29 +2,29 @@
 #include <docopt/docopt.h>
 
 #include <filesystem>
+#include <iostream>
 #include <map>
 #include <string>
 
 #include "ctre.hpp"
-#include "fmt/core.h"
+//#include "fmt/core.h"
 #include "indicators.hpp"
 #include "pugixml/pugixml.hpp"
 #include "spdlog/spdlog.h"
 #include "taskflow/taskflow.hpp"
 
 static const char usage[] =
-    R"(Usage: isbn_scanner [-ho OUTPUT_DIR] [--version] [--verbose]
+    R"(Usage: isbn_scanner [-hdo OUTPUT_DIR] [--version] [--verbose]
 
 -h --help       show this message
+-d --debug      show debug output
 -o OUTPUT_DIR   directory to put organized files in
 --verbose       show more output
 )";
 
 static const char version[] = "ISBN Scanner v0.1";
 
-static constexpr auto isbn_pattern =
-    ctll::fixed_string{"(?<![0-9])(${WSD}9${WSD}7${WSD}[789]${WSD})?+((${WSD}["
-                       "0-9]${WSD}){9}[0-9xX])(?![0-9])"};
+static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-]{10,13})"};
 
 static std::string tika_url = "http://localhost:9998";
 static std::string worldcat_url = "http://classify.oclc.org/classify2/Classify";
@@ -58,6 +58,8 @@ std::vector<u_char> read_file_bytes(std::string &fn) {
   return bytes;
 }
 
+constexpr int ctoi(char c) noexcept { return c - '0'; }
+
 bool is_valid_isbn(std::string &isbn) {
   if (isbn.length() == 10) {
     int multiplier = 1;
@@ -68,7 +70,7 @@ bool is_valid_isbn(std::string &isbn) {
         sum += multiplier * 10;
         continue;
       }
-      sum += multiplier * std::stoi(d);
+      sum += multiplier * ctoi(d);
     }
 
     if (sum % 11 == 0) {
@@ -83,7 +85,7 @@ bool is_valid_isbn(std::string &isbn) {
     int sum = 0;
 
     for (auto c : first_12) {
-      sum += multiplier * std::stoi(c);
+      sum += multiplier * ctoi(c);
       // swap values for mulitiplier
       multiplier ^= one ^ three;
     }
@@ -105,36 +107,18 @@ bool is_valid_isbn(std::string &isbn) {
 std::vector<std::string> find_isbns(std::string &text) {
   auto matches = std::vector<std::string>{};
   for (auto match : ctre::range<isbn_pattern>(text)) {
-    matches.emplace_back(match.get<0>);
+    matches.emplace_back(match.get<0>());
   }
   return matches;
 }
 
-std::string get_file_type(std::string &fn) {
-  auto filebytes = read_file_bytes(fn);
-
-  auto url = fmt::fmt("{}/detect/stream", tika_url);
-  auto resp = cpr::Put(cpr::Url{url}, cpr::Body{filebytes.data()},
-                       cpr::Header{{"accept", "*/*"}});
+std::string get_file_text(std::string &fn) {
+  auto url = fmt::format("{}/tika/form", tika_url);
+  auto resp =
+      cpr::Post(cpr::Url{url}, cpr::Multipart{{"upload", cpr::File{fn}}});
 
   if (resp.status_code != 200) {
-    spdlog::debug("could not get filetype for file: ", fn);
-    return "";
-  }
-
-  return resp.text;
-}
-
-std::string get_file_text(std::string &fn, std::string &filetype) {
-  auto filebytes = read_file_bytes(fn);
-
-  auto url = fmt::fmt("{}/tika", tika_url);
-  auto resp = cpr::Put(cpr::Url{url}, cpr::Body{filebytes.data()},
-                       cpr::Header{{"Content-Type", filetype}});
-
-  if (resp.status_code != 200) {
-    spdlog::debug("could not get text for file: {} with filetype: {}", fn,
-                  filetype);
+    spdlog::debug("could not get text for file: {}", fn);
     return "";
   }
 
@@ -157,18 +141,31 @@ std::map<std::string, std::string> get_isbn_info(std::string &isbn) {
     spdlog::debug("could not parse XML for ISBN: {}", isbn);
     return {};
   }
+
+  auto book_info = std::map<std::string, std::string>{};
+
+  for (auto node : doc.children()) {
+    if (node.name() == std::string{"classify"}) {
+      for (auto child : node.children()) {
+        if (child.name() == std::string{"work"}) {
+          for (auto attr : child.attributes()) {
+            book_info.emplace(attr.name(), attr.value());
+          }
+        }
+      }
+    }
+  }
+
+  return book_info;
 }
 
 void move_file(std::string &fn, std::map<std::string, std::string> &&fileinfo,
-               std::map<std::string, docopt::value> &args) {}
+               std::map<std::string, docopt::value> &args) {
+  std::cout << fn << fileinfo.at("author") << args.at("verbose");
+}
 
 void process_file(std::string &fn, std::map<std::string, docopt::value> &args) {
-  auto filetype = get_file_type(filepath);
-  if (filetype == "") {
-    return;
-  }
-
-  std::string filetext = get_file_text(filepath, filetype);
+  std::string filetext = get_file_text(fn);
   if (filetext == "") {
     return;
   }
@@ -188,7 +185,7 @@ void process_file(std::string &fn, std::map<std::string, docopt::value> &args) {
         continue;
       }
 
-      move_file(filepath, std::move(fileinfo), args);
+      move_file(fn, std::move(fileinfo), args);
     }
   }
 }
@@ -201,14 +198,14 @@ int main(int argc, char *argv[]) {
 
   auto files = std::vector<std::string>{};
   for (auto &filepath : std::filesystem::directory_iterator(curr_dir)) {
-    files.emplace_back(filepath);
+    files.push_back(filepath.path());
   }
 
   spdlog::info("initializing before processing files...");
 
   indicators::BlockProgressBar bar{
       indicators::option::BarWidth{80},
-      indicators::option::ForegroundColor{Color::white},
+      indicators::option::ForegroundColor{indicators::Color::white},
       indicators::option::MaxProgress{files.size()},
       indicators::option::PrefixText{"processing files..."},
       indicators::option::ShowRemainingTime{true}};
@@ -216,14 +213,15 @@ int main(int argc, char *argv[]) {
   tf::Executor executor;
   tf::Taskflow taskflow;
 
-  tf::Task task =
-      taskflow.for_each(files.begin(), files.end(), [args, bar](auto &fn) {
-        process_file(fn, args);
-        bar.tick();
-      });
+  taskflow.for_each(files.begin(), files.end(), [&](auto &fn) {
+    process_file(fn, args);
+    bar.tick();
+  });
 
-  taskflow.emplace(task);
   executor.run(taskflow).wait();
+
+  // simple call to put spdlog below progres bar
+  puts("");
 
   spdlog::info("done!");
 
