@@ -1,3 +1,5 @@
 .*
 !.gitignore
 isbn_scanner
+isbn_test
+a.out
