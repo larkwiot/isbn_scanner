@@ -105,7 +105,8 @@ std::map<std::string, std::string> get_isbn_info(std::string &isbn) {
 
 void move_file(std::string &fn, std::map<std::string, std::string> &&fileinfo,
                std::map<std::string, docopt::value> &args) {
-  auto author = fileinfo.at("author");
+
+  auto author = noexcept_map_at<std::string>(fileinfo, "author");
   spdlog::get("console")->debug("process_file(): raw author {}", author);
 
   std::transform(author.begin(), author.end(), author.begin(), [](u_char c) {
@@ -116,7 +117,7 @@ void move_file(std::string &fn, std::map<std::string, std::string> &&fileinfo,
   });
   spdlog::get("console")->debug("process_file(): reformatted author {}", author);
 
-  auto new_fn = fmt::format("{}_{}_{}", fileinfo.at("isbn"), author, fileinfo.at("title"));
+  auto new_fn = fmt::format("{}_{}_{}", noexcept_map_at<std::string>(fileinfo, "isbn"), author, noexcept_map_at<std::string>(fileinfo, "title"));
 
   std::string operation = "dry ran";
   std::filesystem::path target {};

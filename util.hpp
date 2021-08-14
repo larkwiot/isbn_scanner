@@ -58,6 +58,16 @@ constexpr int ctoi(char c) noexcept {
   return res;
 }
 
+template<typename T, typename U>
+U noexcept_map_at(std::map<T, U>& m, T k) noexcept {
+  try {
+    return m.at(k);
+  } catch (const std::out_of_range& err) {
+    spdlog::get("console")->debug("noexcept_map_at(): {} not in {}", k, m);
+    return {};
+  }
+}
+
 const std::unordered_set<char> isbn_chars = {
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
     'X'
