@@ -14,25 +14,7 @@
    limitations under the License.
 */
 
-#include <cpr/cpr.h>
-#include <docopt/docopt.h>
-
-#include <filesystem>
-#include <iostream>
-#include <map>
-#include <string>
-#include <unordered_set>
-#include <mutex>
-
-#include "spdlog/spdlog.h"
-#include "spdlog/sinks/stdout_color_sinks.h"
-#include "fmt/ranges.h"
-#include "ctre/ctre.hpp"
-//#include "fmt/core.h"
-#include "indicators/indicators.hpp"
-#include "pugixml/pugixml.hpp"
-#include "taskflow/taskflow.hpp"
-#include "backward/backward.hpp"
+#include "util.hpp"
 
 static const char usage[] =
     R"(Usage: isbn_scanner [-hdmo OUTPUT_DIR] [--version] [--verbose | --debug] [--dry-run]
@@ -61,98 +43,6 @@ static std::unordered_set<u_char> author_filter_chars = {
 static size_t books_organized = 0;
 static std::mutex books_organized_lock {};
 
-#define u_char unsigned char
-
-std::vector<u_char> read_file_bytes(std::string &fn) {
-  std::ifstream fh{fn, std::ios::binary | std::ios::ate};
-
-  if (!fh == true) {
-    spdlog::get("stderr")->error("could not open file: {}", fn);
-    exit(0);
-  }
-
-  auto end = fh.tellg();
-  fh.seekg(0, std::ios::beg);
-
-  auto size = std::size_t(end - fh.tellg());
-
-  if (size == 0) {
-    return {};
-  }
-
-  std::vector<u_char> bytes(size);
-
-  if (!fh.read(reinterpret_cast<char *>(bytes.data()), bytes.size()) == true) {
-    spdlog::get("stderr")->error("could not read file: {}", fn);
-    exit(0);
-  }
-
-  spdlog::get("console")->debug("read file {} at {} bytes", fn, fn.size());
-
-  return bytes;
-}
-
-constexpr int ctoi(char c) noexcept { return c - '0'; }
-
-bool is_valid_isbn(std::string isbn) {
-  isbn = std::erase_if(isbn, [](u_char c) {
-    if (c > '9' || c < '0') {
-      return true;
-    }
-    return false;
-  });
-
-  if (isbn.length() == 10) {
-    int multiplier = 1;
-    int sum = 0;
-
-    for (auto d : isbn) {
-      if (d == 'X') {
-        sum += multiplier * 10;
-        continue;
-      }
-      sum += multiplier * ctoi(d);
-    }
-
-    if (sum % 11 == 0) {
-      return true;
-    }
-
-    spdlog::get("console")->debug("isbn {} invalid ISBN 10 checksum", isbn);
-
-    return false;
-  } else if (isbn.length() == 13) {
-    auto first_12 = isbn.substr(0, 12);
-    auto check_digit = std::stoi(isbn.substr(12));
-    int one = 1;
-    int three = 3;
-    int multiplier = one;
-    int sum = 0;
-
-    for (auto c : first_12) {
-      sum += multiplier * ctoi(c);
-      // swap values for mulitiplier
-      multiplier ^= one ^ three;
-    }
-
-    int remainder = sum % 10;
-
-    if (remainder == 0 && check_digit == 0) {
-      return true;
-    }
-
-    if ((10 - remainder) == check_digit) {
-      return true;
-    }
-
-    spdlog::get("console")->debug("isbn {} invalid ISBN 13 checksum", isbn);
-
-    return false;
-  }
-
-  return false;
-}
-
 std::vector<std::string> find_isbns(std::string &text) {
   auto matches = std::vector<std::string>{};
   for (auto match : ctre::range<isbn_pattern>(text)) {
@@ -167,7 +57,7 @@ std::string get_file_text(std::string &fn) {
       cpr::Post(cpr::Url{url}, cpr::Multipart{{"upload", cpr::File{fn}}});
 
   if (resp.status_code != 200) {
-    spdlog::get("console")->debug("could not get text for file: {}", fn);
+    spdlog::get("console")->debug("process_file(): could not get text for file: {}", fn);
     return "";
   }
 
@@ -179,17 +69,17 @@ std::map<std::string, std::string> get_isbn_info(std::string &isbn) {
                        cpr::Parameters{{"isbn", isbn}, {"summary", "true"}});
 
   if (resp.status_code != 200) {
-    spdlog::get("console")->debug("could not request metadata for ISBN: {}", isbn);
+    spdlog::get("console")->debug("process_file(): could not request metadata for ISBN: {}", isbn);
     return {};
   }
 
-  spdlog::get("console")->debug("got something for {}", isbn);
+  spdlog::get("console")->debug("process_file(): got something for {}", isbn);
 
   pugi::xml_document doc;
   pugi::xml_parse_result result = doc.load_string(resp.text.c_str());
 
   if (!result) {
-    spdlog::get("console")->debug("could not parse XML for ISBN: {}", isbn);
+    spdlog::get("console")->debug("process_file(): could not parse XML for ISBN: {}", isbn);
     return {};
   }
 
@@ -203,7 +93,7 @@ std::map<std::string, std::string> get_isbn_info(std::string &isbn) {
         if (child.name() == std::string{"work"}) {
           for (auto attr : child.attributes()) {
             book_info.emplace(attr.name(), attr.value());
-            spdlog::get("console")->debug("{} book info: {} => {}", isbn, attr.name(), attr.value());
+            spdlog::get("console")->debug("process_file(): {} book info: {} => {}", isbn, attr.name(), attr.value());
           }
         }
       }
@@ -216,7 +106,7 @@ std::map<std::string, std::string> get_isbn_info(std::string &isbn) {
 void move_file(std::string &fn, std::map<std::string, std::string> &&fileinfo,
                std::map<std::string, docopt::value> &args) {
   auto author = fileinfo.at("author");
-  spdlog::get("console")->debug("raw author {}", author);
+  spdlog::get("console")->debug("process_file(): raw author {}", author);
 
   std::transform(author.begin(), author.end(), author.begin(), [](u_char c) {
     if (author_filter_chars.contains(c)) {
@@ -224,7 +114,7 @@ void move_file(std::string &fn, std::map<std::string, std::string> &&fileinfo,
     }
     return static_cast<char>(std::tolower(c));
   });
-  spdlog::get("console")->debug("reformatted author {}", author);
+  spdlog::get("console")->debug("process_file(): reformatted author {}", author);
 
   auto new_fn = fmt::format("{}_{}_{}", fileinfo.at("isbn"), author, fileinfo.at("title"));
 
@@ -251,10 +141,10 @@ void move_file(std::string &fn, std::map<std::string, std::string> &&fileinfo,
 }
 
 void process_file(std::string &fn, std::map<std::string, docopt::value> &args) {
-  spdlog::get("console")->debug("working on {}", fn);
+  spdlog::get("console")->debug("process_file(): working on {}", fn);
   std::string filetext = get_file_text(fn);
   if (filetext == "") {
-    spdlog::get("console")->debug("{} got no text", fn);
+    spdlog::get("console")->debug("process_file(): {} got no text", fn);
     return;
   }
 
@@ -271,20 +161,24 @@ void process_file(std::string &fn, std::map<std::string, docopt::value> &args) {
       auto fileinfo = get_isbn_info(isbn);
 
       if (fileinfo.empty()) {
-        spdlog::get("console")->debug("couldn't find any info for file {}", fn);
+        spdlog::get("console")->debug("process_file(): couldn't find any info for file {}", fn);
         continue;
       }
 
       move_file(fn, std::move(fileinfo), args);
 
-      spdlog::get("console")->debug("{} was organized", fn);
+      spdlog::get("console")->debug("process_file(): {} was organized", fn);
 
       books_organized_lock.lock();
       books_organized++;
       books_organized_lock.unlock();
+      
+      return;
     }
+
+    spdlog::get("console")->info("could not find valid ISBN for {}", fn);
   } else {
-    spdlog::get("console")->debug("{} had no ISBNs", fn);
+    spdlog::get("console")->info("{} had no ISBNs", fn);
   }
 }
 
