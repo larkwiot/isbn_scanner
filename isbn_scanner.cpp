@@ -39,7 +39,7 @@ static size_t books_organized = 0;
 static std::mutex books_organized_lock {};
 
 auto find_isbns(std::string &text) {
-  auto matches = std::unordered_set<std::string>{};
+  auto matches = std::set<std::string>{};
   for (auto match : ctre::range<isbn_pattern>(text)) {
     matches.emplace(match.get<0>());
   }
@@ -112,7 +112,7 @@ void move_file(std::string &fn, std::map<std::string, std::string> &&fileinfo,
   auto title = noexcept_map_at<std::string>(fileinfo, "title");
   title = clean_name(title);
 
-  auto new_fn = fmt::format("{}_{}_{}", isbn, author, title);
+  auto new_fn = fmt::format("{}_{}_{}", isbn, title, author);
 
   std::string output_dir = "./";
   if (args.at("OUTPUT_DIR").asBool() == true) {
