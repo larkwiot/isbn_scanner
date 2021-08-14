@@ -101,10 +101,6 @@ const std::unordered_set<char> isbn_chars = {
     'X'
   };
 
-bool is_not_isbn_char(char c) noexcept {
-  return !(isbn_chars.contains(c));
-}
-
 static constexpr auto all_one_char = ctll::fixed_string{"(.)\\1+"};
 
 bool is_valid_isbn(std::string isbn) {
@@ -119,11 +115,8 @@ bool is_valid_isbn(std::string isbn) {
   {
   std::string new_isbn = "";
   for (auto c : isbn) {
-    if (is_not_isbn_char(c) == false) {
+    if (isbn_chars.contains(c)) {
       new_isbn += c;
-    } else {
-      /* spdlog::get("console")->debug("is_valid_isbn(): {} is not a valid ISBN char", c); */
-      return false;
     }
   }
   isbn = new_isbn;
