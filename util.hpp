@@ -73,11 +73,12 @@ static std::unordered_set<char> filter_chars = {
   '.',
   '\'',
   '|',
-  ':'
+  '-'
 };
 
 static std::unordered_map<char, char> replace_chars = {
-  {' ', '_'}
+  {' ', '_'},
+  {':', '-'}
 };
 
 std::string clean_name(std::string& name) {
