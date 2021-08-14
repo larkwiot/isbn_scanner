@@ -34,12 +34,6 @@ static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-]{9,15}[0-9X])"
 static std::string tika_url = "http://localhost:9998";
 static std::string worldcat_url = "http://classify.oclc.org/classify2/Classify";
 
-static std::unordered_set<u_char> author_filter_chars = {
-  ',',
-  '.',
-  ' '
-};
-
 static size_t books_organized = 0;
 static std::mutex books_organized_lock {};
 
@@ -93,12 +87,14 @@ std::map<std::string, std::string> get_isbn_info(std::string &isbn) {
         if (child.name() == std::string{"work"}) {
           for (auto attr : child.attributes()) {
             book_info.emplace(attr.name(), attr.value());
-            spdlog::get("console")->debug("process_file(): {} book info: {} => {}", isbn, attr.name(), attr.value());
+            /* spdlog::get("console")->debug("process_file(): {} book info: {} => {}", isbn, attr.name(), attr.value()); */
           }
         }
       }
     }
   }
+
+  spdlog::get("console")->debug("process_file(): book info {}", book_info);
 
   return book_info;
 }
@@ -106,27 +102,28 @@ std::map<std::string, std::string> get_isbn_info(std::string &isbn) {
 void move_file(std::string &fn, std::map<std::string, std::string> &&fileinfo,
                std::map<std::string, docopt::value> &args) {
 
+  auto isbn = noexcept_map_at<std::string>(fileinfo, "isbn");
+
   auto author = noexcept_map_at<std::string>(fileinfo, "author");
-  spdlog::get("console")->debug("process_file(): raw author {}", author);
+  author = clean_name(author);
 
-  std::transform(author.begin(), author.end(), author.begin(), [](u_char c) {
-    if (author_filter_chars.contains(c)) {
-      return '_';
-    }
-    return static_cast<char>(std::tolower(c));
-  });
-  spdlog::get("console")->debug("process_file(): reformatted author {}", author);
+  auto title = noexcept_map_at<std::string>(fileinfo, "title");
+  title = clean_name(title);
 
-  auto new_fn = fmt::format("{}_{}_{}", noexcept_map_at<std::string>(fileinfo, "isbn"), author, noexcept_map_at<std::string>(fileinfo, "title"));
+  auto new_fn = fmt::format("{}_{}_{}", isbn, author, title);
+
+  std::string output_dir = "./";
+  if (args.at("OUTPUT_DIR").asBool() == true) {
+    output_dir = args.at("OUTPUT_DIR").asString();
+  }
 
   std::string operation = "dry ran";
   std::filesystem::path target {};
-
-  if (!args.at("--dry-run")) {
-    std::string output_dir = args.at("OUTPUT_DIR").asString();
-    std::filesystem::path target_dir {};
-    std::filesystem::path target_file {new_fn};
-    target = target_dir / target_file;
+  std::filesystem::path target_dir {output_dir};
+  std::filesystem::path target_file {new_fn};
+  target = target_dir / target_file;
+  
+  if (!args.at("--dry-run")) {  
     std::filesystem::copy(fn, target);
     if (args.at("--move")) {
       std::filesystem::remove(fn);
@@ -142,7 +139,7 @@ void move_file(std::string &fn, std::map<std::string, std::string> &&fileinfo,
 }
 
 void process_file(std::string &fn, std::map<std::string, docopt::value> &args) {
-  spdlog::get("console")->debug("process_file(): working on {}", fn);
+  /* spdlog::get("console")->debug("process_file(): working on {}", fn); */
   std::string filetext = get_file_text(fn);
   if (filetext == "") {
     spdlog::get("console")->debug("process_file(): {} got no text", fn);
@@ -157,11 +154,10 @@ void process_file(std::string &fn, std::map<std::string, docopt::value> &args) {
       if (!is_valid_isbn(isbn)) {
         continue;
       }
-      spdlog::get("console")->info("file {} = ISBN {}", fn, isbn);
 
       auto fileinfo = get_isbn_info(isbn);
 
-      if (fileinfo.empty()) {
+      if (fileinfo.size() == 1) {
         spdlog::get("console")->debug("process_file(): couldn't find any info for file {}", fn);
         continue;
       }
@@ -191,6 +187,11 @@ int main(int argc, char *argv[]) {
   auto args = docopt::docopt(usage, {argv + 1, argv + argc}, true, version);
   if (args.at("--debug").asBool()) {
     console_log->set_level(spdlog::level::debug);
+
+    spdlog::get("console")->debug("main(): args:");
+    for (auto const& arg : args) {
+      std::cout << arg.first << " -> " << arg.second << "\n";
+    }
   } else if (args.at("--verbose").asBool()) {
     console_log->set_level(spdlog::level::info);
   } else {
@@ -232,6 +233,7 @@ int main(int argc, char *argv[]) {
 
   // simple call to put spdlog below progres bar
   puts("");
+  spdlog::set_level(spdlog::level::info);
   console_log->info("organized {}/{}", books_organized, files.size());
   console_log->info("done!");
 

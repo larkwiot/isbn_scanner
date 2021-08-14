@@ -40,6 +40,8 @@ int main() {
       expect(is_valid_isbn("8425507005") == false);
       expect(is_valid_isbn("053439XXXX") == false);
       expect(is_valid_isbn("12389X9814") == false);
+      expect(is_valid_isbn("0000000000") == false);
+      expect(is_valid_isbn("1111111111") == false);
     };
 
     should("isbn13 valid") = [] {

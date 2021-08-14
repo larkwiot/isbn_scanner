@@ -68,6 +68,34 @@ U noexcept_map_at(std::map<T, U>& m, T k) noexcept {
   }
 }
 
+static std::unordered_set<char> filter_chars = {
+  ',',
+  '.',
+  '\'',
+  '|',
+  ':'
+};
+
+static std::unordered_map<char, char> replace_chars = {
+  {' ', '_'}
+};
+
+std::string clean_name(std::string& name) {
+  std::string cleaned = "";
+
+  for (auto c : name) {
+    if (filter_chars.contains(c)) {
+      continue;
+    } else if (replace_chars.contains(c)) {
+      cleaned += replace_chars.at(c);
+    } else {
+      cleaned += c;
+    }
+  }
+
+  return cleaned;
+}
+
 const std::unordered_set<char> isbn_chars = {
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
     'X'
@@ -77,8 +105,14 @@ bool is_not_isbn_char(char c) noexcept {
   return !(isbn_chars.contains(c));
 }
 
+static constexpr auto all_one_char = ctll::fixed_string{"(.)\\1+"};
+
 bool is_valid_isbn(std::string isbn) {
   /* spdlog::get("console")->debug("is_valid_isbn(): raw ISBN: {}", isbn); */
+
+  if (ctre::match<all_one_char>(isbn)) {
+    return false;
+  }
 
   // TODO: make this line work instead of the below
   /* isbn = std::erase_if(isbn, is_not_isbn_char); */
@@ -88,14 +122,14 @@ bool is_valid_isbn(std::string isbn) {
     if (is_not_isbn_char(c) == false) {
       new_isbn += c;
     } else {
-      spdlog::get("console")->debug("is_valid_isbn(): {} is not a valid ISBN char", c);
+      /* spdlog::get("console")->debug("is_valid_isbn(): {} is not a valid ISBN char", c); */
       return false;
     }
   }
   isbn = new_isbn;
   }
 
-  spdlog::get("console")->debug("is_valid_isbn(): cleaned ISBN: {}", isbn);
+  /* spdlog::get("console")->debug("is_valid_isbn(): cleaned ISBN: {}", isbn); */
 
   if (isbn.length() == 10) {
     int multiplier = 10;
@@ -113,7 +147,7 @@ bool is_valid_isbn(std::string isbn) {
         if (di == isbn_end - 1) {
           sum += multiplier * 10;
         } else {
-          spdlog::get("console")->debug("is_valid_isbn(): ISBN {} had X not at end", isbn);
+          /* spdlog::get("console")->debug("is_valid_isbn(): ISBN {} had X not at end", isbn); */
           return false;
         }
       } else {
@@ -127,7 +161,7 @@ bool is_valid_isbn(std::string isbn) {
       return true;
     }
 
-    spdlog::get("console")->debug("is_valid_isbn(): ISBN {} invalid ISBN 10 checksum", isbn);
+    /* spdlog::get("console")->debug("is_valid_isbn(): ISBN {} invalid ISBN 10 checksum", isbn); */
 
     return false;
   } else if (isbn.length() == 13) {
@@ -136,7 +170,7 @@ bool is_valid_isbn(std::string isbn) {
     try {
       check_digit = std::stoul(isbn.substr(12));
     } catch (const std::invalid_argument err) {
-      spdlog::get("console")->debug("ISBN {} cannot be converted to number", isbn.substr(12));
+      /* spdlog::get("console")->debug("ISBN {} cannot be converted to number", isbn.substr(12)); */
       return false;
     }
     int one = 1;
@@ -160,12 +194,12 @@ bool is_valid_isbn(std::string isbn) {
       return true;
     }
 
-    spdlog::get("console")->debug("is_valid_isbn(): ISBN {} invalid ISBN 13 checksum", isbn);
+    /* spdlog::get("console")->debug("is_valid_isbn(): ISBN {} invalid ISBN 13 checksum", isbn); */
 
     return false;
   }
 
-  spdlog::get("console")->debug("is_valid_isbn(): ISBN {} is not a valid length", isbn);
+  /* spdlog::get("console")->debug("is_valid_isbn(): ISBN {} is not a valid length", isbn); */
 
   return false;
 }
