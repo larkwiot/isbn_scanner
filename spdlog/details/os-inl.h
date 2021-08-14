@@ -199,6 +199,12 @@ SPDLOG_INLINE bool path_exists(const filename_t &filename) SPDLOG_NOEXCEPT
 #endif
 }
 
+#ifdef _MSC_VER
+    // avoid warning about unreachable statement at the end of filesize()
+    #pragma warning(push)
+    #pragma warning(disable: 4702)
+#endif
+
 // Return file size according to open FILE* object
 SPDLOG_INLINE size_t filesize(FILE *f)
 {
@@ -208,7 +214,7 @@ SPDLOG_INLINE size_t filesize(FILE *f)
     }
 #if defined(_WIN32) && !defined(__CYGWIN__)
     int fd = ::_fileno(f);
-#if _WIN64 // 64 bits
+#if defined(_WIN64) // 64 bits
     __int64 ret = ::_filelengthi64(fd);
     if (ret >= 0)
     {
@@ -248,6 +254,10 @@ SPDLOG_INLINE size_t filesize(FILE *f)
     throw_spdlog_ex("Failed getting file size from fd", errno);
     return 0; // will not be reached.
 }
+
+#ifdef _MSC_VER
+    #pragma warning(pop)
+#endif
 
 // Return utc offset in minutes or throw spdlog_ex on failure
 SPDLOG_INLINE int utc_minutes_offset(const std::tm &tm)
@@ -356,7 +366,7 @@ SPDLOG_INLINE size_t thread_id() SPDLOG_NOEXCEPT
 
 // This is avoid msvc issue in sleep_for that happens if the clock changes.
 // See https://github.com/gabime/spdlog/issues/609
-SPDLOG_INLINE void sleep_for_millis(int milliseconds) SPDLOG_NOEXCEPT
+SPDLOG_INLINE void sleep_for_millis(unsigned int milliseconds) SPDLOG_NOEXCEPT
 {
 #if defined(_WIN32)
     ::Sleep(milliseconds);
@@ -397,17 +407,26 @@ SPDLOG_INLINE bool is_color_terminal() SPDLOG_NOEXCEPT
 #ifdef _WIN32
     return true;
 #else
-    static constexpr std::array<const char *, 14> terms = {
-        {"ansi", "color", "console", "cygwin", "gnome", "konsole", "kterm", "linux", "msys", "putty", "rxvt", "screen", "vt100", "xterm"}};
 
-    const char *env_p = std::getenv("TERM");
-    if (env_p == nullptr)
-    {
-        return false;
-    }
+    static const bool result = []() {
+        const char *env_colorterm_p = std::getenv("COLORTERM");
+        if (env_colorterm_p != nullptr)
+        {
+            return true;
+        }
 
-    static const bool result =
-        std::any_of(terms.begin(), terms.end(), [&](const char *term) { return std::strstr(env_p, term) != nullptr; });
+        static constexpr std::array<const char *, 16> terms = {{"ansi", "color", "console", "cygwin", "gnome", "konsole", "kterm", "linux",
+            "msys", "putty", "rxvt", "screen", "vt100", "xterm", "alacritty", "vt102"}};
+
+        const char *env_term_p = std::getenv("TERM");
+        if (env_term_p == nullptr)
+        {
+            return false;
+        }
+
+        return std::any_of(terms.begin(), terms.end(), [&](const char *term) { return std::strstr(env_term_p, term) != nullptr; });
+    }();
+
     return result;
 #endif
 }
@@ -427,7 +446,7 @@ SPDLOG_INLINE bool in_terminal(FILE *file) SPDLOG_NOEXCEPT
 #if (defined(SPDLOG_WCHAR_TO_UTF8_SUPPORT) || defined(SPDLOG_WCHAR_FILENAMES)) && defined(_WIN32)
 SPDLOG_INLINE void wstr_to_utf8buf(wstring_view_t wstr, memory_buf_t &target)
 {
-    if (wstr.size() > static_cast<size_t>((std::numeric_limits<int>::max)()))
+    if (wstr.size() > static_cast<size_t>((std::numeric_limits<int>::max)()) / 2 - 1)
     {
         throw_spdlog_ex("UTF-16 string is too big to be converted to UTF-8");
     }
@@ -459,6 +478,41 @@ SPDLOG_INLINE void wstr_to_utf8buf(wstring_view_t wstr, memory_buf_t &target)
 
     throw_spdlog_ex(fmt::format("WideCharToMultiByte failed. Last error: {}", ::GetLastError()));
 }
+
+SPDLOG_INLINE void utf8_to_wstrbuf(string_view_t str, wmemory_buf_t &target)
+{
+    if (str.size() > static_cast<size_t>((std::numeric_limits<int>::max)()) - 1)
+    {
+        throw_spdlog_ex("UTF-8 string is too big to be converted to UTF-16");
+    }
+
+    int str_size = static_cast<int>(str.size());
+    if (str_size == 0)
+    {
+        target.resize(0);
+        return;
+    }
+
+    int result_size = static_cast<int>(target.capacity());
+    if (str_size + 1 > result_size)
+    {
+        result_size = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, str.data(), str_size, NULL, 0);
+    }
+
+    if (result_size > 0)
+    {
+        target.resize(result_size);
+        result_size = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, str.data(), str_size, target.data(), result_size);
+
+        if (result_size > 0)
+        {
+            target.resize(result_size);
+            return;
+        }
+    }
+
+    throw_spdlog_ex(fmt::format("MultiByteToWideChar failed. Last error: {}", ::GetLastError()));
+}
 #endif // (defined(SPDLOG_WCHAR_TO_UTF8_SUPPORT) || defined(SPDLOG_WCHAR_FILENAMES)) && defined(_WIN32)
 
 // return true on success
@@ -489,15 +543,10 @@ SPDLOG_INLINE bool create_dir(filename_t path)
         return false;
     }
 
-#ifdef _WIN32
-    // support forward slash in windows
-    std::replace(path.begin(), path.end(), '/', folder_sep);
-#endif
-
     size_t search_offset = 0;
     do
     {
-        auto token_pos = path.find(folder_sep, search_offset);
+        auto token_pos = path.find_first_of(folder_seps_filename, search_offset);
         // treat the entire path as a folder if no folder separator not found
         if (token_pos == filename_t::npos)
         {
@@ -523,11 +572,7 @@ SPDLOG_INLINE bool create_dir(filename_t path)
 // "abc///" => "abc//"
 SPDLOG_INLINE filename_t dir_name(filename_t path)
 {
-#ifdef _WIN32
-    // support forward slash in windows
-    std::replace(path.begin(), path.end(), '/', folder_sep);
-#endif
-    auto pos = path.find_last_of(folder_sep);
+    auto pos = path.find_last_of(folder_seps_filename);
     return pos != filename_t::npos ? path.substr(0, pos) : filename_t{};
 }
 
