@@ -1,22 +1,11 @@
-#include <cpr/cpr.h>
-#include <docopt/docopt.h>
-
-#include <filesystem>
-#include <iostream>
-#include <map>
+#include <vector>
 #include <string>
+#include <fstream>
 #include <unordered_set>
-#include <mutex>
+#include <map>
 
 #include "spdlog/spdlog.h"
-#include "spdlog/sinks/stdout_color_sinks.h"
-#include "fmt/ranges.h"
 #include "ctre/ctre.hpp"
-//#include "fmt/core.h"
-#include "indicators/indicators.hpp"
-#include "pugixml/pugixml.hpp"
-#include "taskflow/taskflow.hpp"
-#include "backward/backward.hpp"
 
 #define u_char unsigned char
 
@@ -81,7 +70,7 @@ static std::unordered_map<char, char> replace_chars = {
   {':', '-'}
 };
 
-std::string clean_name(std::string& name) {
+std::string clean_name(std::string const& name) {
   std::string cleaned = "";
 
   for (auto c : name) {
