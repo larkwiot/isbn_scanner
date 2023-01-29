@@ -1,0 +1,45 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 14,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "common",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "ROARING_LINK_STATIC": "ON",
+        "ROARING_BUILD_LTO": "ON"
+      }
+    },
+    {
+      "name": "Debug",
+      "displayName": "Debug",
+      "description": "Debug mode with symbols, ASAN, and other checks",
+      "inherits": "common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-Wall -Wextra -Wconversion -Wno-unused-command-line-argument -fuse-ld=mold -Wl,--gc-sections,-z,noexecstack -Og -g3 -glldb -fsanitize=address",
+        "SIMDJSON_DEVELOPMENT_CHECKS": "ON",
+        "SIMDJSON_SANITIZE": "ON"
+      }
+    },
+    {
+      "name": "Release",
+      "displayName": "Release",
+      "description": "Release mode with optimizations",
+      "inherits": "common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS": "-Wall -Wextra -Wconversion -Wno-unused-command-line-argument -fuse-ld=mold -Wl,--gc-sections,-z,noexecstack -O2 -flto"
+      }
+    }
+  ]
+}

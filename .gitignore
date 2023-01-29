@@ -4,3 +4,4 @@ isbn_scanner
 isbn_test
 a.out
 compile_commands.json
+out/*
