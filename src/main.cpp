@@ -230,10 +230,11 @@ int main(int argc, char* argv[]) {
 	bool dryRun = false;
 
 	auto cli = clipp::group(clipp::option("-o", "--output").set(outDirectory).doc("output directory"),
-							clipp::option("-i", "--input").set(outDirectory).doc("input directory"),
+							clipp::option("-i", "--input").set(inDirectory).doc("input directory"),
 							clipp::option("-d", "--debug").set(debug).doc("debug logging"),
-							clipp::option("-v", "--verbose").set(debug).doc("verbose logging"),
-							clipp::option("-m", "--move").set(move).doc("move instead of copy"));
+							clipp::option("-v", "--verbose").set(verbose).doc("verbose logging"),
+							clipp::option("-m", "--move").set(move).doc("move instead of copy"),
+							clipp::option("--dry-run").set(dryRun).doc("simulate process without actually copying or moving any files"));
 
 	if (!clipp::parse(argc, argv, cli)) {
 		print_usage(cli, argv[0]);
