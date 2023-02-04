@@ -1,5 +1,5 @@
 /*
-	 Copyright 2021 larkwiot
+	 Copyright 2023 larkwiot
 
 	 Licensed under the Apache License, Version 2.0 (the "License");
 	 you may not use this file except in compliance with the License.
@@ -16,19 +16,6 @@
 
 #include "main.hpp"
 
-static const char usage[] =
-	R"(Usage: isbn_scanner [-hdmo OUTPUT_DIR] [--version] [--verbose | --debug] [--dry-run]
-
--h --help                                show this message
--d --debug                               show debug output
--m --move                                move files instead of copy
--o <OUTPUT_DIR>, --output <OUTPUT_DIR>   directory to put organized files in [default: /tmp/]
---verbose                                show more output
---dry-run                                don't move or copy files, just lookup metadata
-)";
-
-static const char version[] = "ISBN Scanner v0.1";
-
 static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-]{9,15}[0-9X])"};
 
 static std::string tika_url = "http://localhost:9998";
@@ -41,7 +28,6 @@ void increment_books_organized() {
 	books_organized_lock.lock();
 	books_organized++;
 	books_organized_lock.unlock();
-	return;
 }
 
 auto find_isbns(std::string& text) {
@@ -53,80 +39,94 @@ auto find_isbns(std::string& text) {
 }
 
 std::string get_file_text(std::string& fn) {
-	auto url = fmt::format("{}/tika/form", tika_url);
-	auto resp = cpr::Post(cpr::Url{url}, cpr::Multipart{{"upload", cpr::File{fn}}});
+	auto client = httplib::Client(tika_url);
 
-	if (resp.status_code != 200) {
+	auto filebytes = read_file_bytes(fn);
+
+	auto form = httplib::MultipartFormDataItems {
+		{"upload", "", fn, "application/octet-stream"}
+	};
+
+	auto headers = httplib::Headers {
+		{"Accept", "*/*"}
+	};
+
+	auto resp = client.Post("/tika/form", headers, form);
+
+	if (resp->status != 200) {
 		spdlog::get("console")->debug("get_file_text(): could not get text for file: {}", fn);
 		return "";
 	}
 
-	return resp.text;
+	return resp->body;
 }
 
-json get_file_metadata(std::string& fn) {
-	auto url = fmt::format("{}/meta/form", tika_url);
-	auto resp = cpr::Post(cpr::Url{url}, cpr::Multipart{{"upload", cpr::File{fn}}},
-						  cpr::Header{{"Accept", "application/json"}});
+json get_file_metadata(std::string& fn, const std::string& filetext) {
+	auto client = httplib::Client(tika_url);
 
-	if (resp.status_code != 200) {
+	auto form = httplib::MultipartFormDataItems {
+		{"upload", filetext, "", ""}
+	};
+
+	auto headers = httplib::Headers {
+		{"Accept", "application/json"}
+	};
+
+	auto resp = client.Post("/meta/form", headers, form);
+
+	if (resp->status != 200) {
 		spdlog::get("console")->debug("get_file_metadata(): could not get metadata for file: {}", fn);
 		return {};
 	}
 
-	return json{resp.text};
+	return json{resp->body};
 }
 
-json worldcat_to_json(std::string worldcat_xml) {
+std::vector<WorldcatBook> parse_worldcat_data(std::string worldcat_xml) {
 	pugi::xml_document doc;
 	pugi::xml_parse_result result = doc.load_string(worldcat_xml.c_str());
 
 	if (!result) {
-		spdlog::get("console")->debug("worldcat_to_json(): could not parse XML:\n{}", worldcat_xml);
+		spdlog::get("console")->debug("parse_worldcat_data(): could not parse XML:\n{}", worldcat_xml);
 		return {};
 	}
 
-	json book_info;
+	std::vector<WorldcatBook> books {};
 
-	for (auto node : doc.children()) {
-		if (node.name() == std::string{"classify"}) {
-			for (auto child : node.children()) {
-				if (child.name() == std::string{"work"}) {
-					for (auto attr : child.attributes()) {
-						book_info[attr.name()] = attr.value();
-						/* spdlog::get("console")->debug("process_file(): {} book info: {}
-						 * => {}", isbn, attr.name(), attr.value()); */
-					}
-				}
-			}
-		}
+	for (auto work : doc.child("classify").child("works").children("work")) {
+		const auto author = work.attribute("author").value();
+		const auto title = work.attribute("title").value();
+		const auto lowYear = work.attribute("lyr").value();
+		const auto highYear = work.attribute("hyr").value();
+		books.emplace_back(author, title, lowYear, highYear);
 	}
 
-	spdlog::get("console")->debug("worldcat_to_json(): book info {}", book_info);
+	spdlog::get("console")->debug("parse_worldcat_data(): book info {}", books.rbegin()->_title);
 
-	return book_info;
+	return books;
 }
 
-json get_isbn_info(std::string const& isbn) {
-	auto resp = cpr::Get(cpr::Url{worldcat_url}, cpr::Parameters{{"isbn", isbn}, {"summary", "true"}});
+std::vector<WorldcatBook> get_by_isbn(std::string const& isbn) {
+	auto client = httplib::Client(worldcat_url);
 
-	if (resp.status_code != 200) {
-		spdlog::get("console")->debug("get_isbn_info(): could not request metadata for ISBN: {}", isbn);
+	auto resp = client.Get(fmt::format("_isbn={}&summary=true", isbn));
+
+	if (resp->status != 200) {
+		spdlog::get("console")->debug("get_by_isbn(): could not request metadata for ISBN: {}", isbn);
 		return {};
 	}
-
-	return worldcat_to_json(resp.text);
+	return parse_worldcat_data(resp->body);
 }
 
-json get_title_info(std::string const& title) {
-	auto resp = cpr::Get(cpr::Url{worldcat_url}, cpr::Parameters{{"title", title}, {"summary", "true"}});
-
-	if (resp.status_code != 200) {
-		spdlog::get("console")->debug("get_title_info(): could not request metadata for title: {}", title);
-	}
-
-	return worldcat_to_json(resp.text);
-}
+//std::vector<WorldcatBook> get_by_title(std::string const& title) {
+//	auto resp = cpr::Get(cpr::Url{worldcat_url}, cpr::Parameters{{"title", title}, {"summary", "true"}});
+//
+//	if (resp.status_code != 200) {
+//		spdlog::get("console")->debug("get_by_title(): could not request metadata for title: {}", title);
+//	}
+//
+//	return parse_worldcat_data(resp.text);
+//}
 
 void move_file(std::string& fn, Book const& book, const std::string& outputDirectory, TransferMode mode) {
 	auto new_fn = book.get_new_filename();
@@ -151,63 +151,60 @@ void move_file(std::string& fn, Book const& book, const std::string& outputDirec
 	}
 
 	spdlog::get("console")->info("{} file {} to {}", operation, fn, target.string());
-
-	return;
 }
 
 void process_file(std::string& fn, const std::string& outputDirectory, TransferMode mode) {
 	/* spdlog::get("console")->debug("process_file(): working on {}", fn); */
 	std::string filetext = get_file_text(fn);
-	if (filetext == "") {
+	if (filetext.empty()) {
 		spdlog::get("console")->debug("process_file(): {} got no text", fn);
 		return;
 	}
 
-	Book book{get_file_metadata(fn)};
-	if (book.get_isbn().empty() == false) {
-		json isbn_info = get_isbn_info(book.get_isbn());
-		book.merge_from_json(isbn_info);
-		move_file(fn, book, outputDirectory, mode);
-		increment_books_organized();
+	const auto found_isbns = find_isbns(filetext);
+	if (found_isbns.empty()) {
+		spdlog::get("console")->debug("process_file(): {} no found_isbns", fn);
 		return;
 	}
 
-	if (book.get_title().empty() == false) {
-		json title_info = get_title_info(book.get_title());
-		book.merge_from_json(title_info);
-		move_file(fn, book, outputDirectory, mode);
-		increment_books_organized();
-		return;
-	}
-
-	auto isbns = find_isbns(filetext);
-
-	/* spdlog::get("console")->debug("process_file(): {} found ISBNs: {}", fn,
-	 * isbns); */
-
-	std::set<std::string> valid_isbns{};
-	std::copy_if(isbns.begin(), isbns.end(), std::inserter(valid_isbns, valid_isbns.begin()), is_valid_isbn);
-
-	if (!valid_isbns.empty()) {
-		// TODO: this could probably be a transform()
-		for (auto isbn : valid_isbns) {
-			Book book{get_isbn_info(isbn)};
-
-			if (book.is_info_found() == false) {
-				spdlog::get("console")->debug("could not find any info for {} with {}", fn, isbn);
-				continue;
-			}
-
-			move_file(fn, book, outputDirectory, mode);
-			return;
+	std::vector<std::string> isbns {};
+	for (auto isbn : found_isbns) {
+		if (is_valid_isbn(isbn)) {
+			isbns.push_back(isbn);
 		}
-
-		spdlog::get("console")->info("could not find valid ISBN for {}", fn);
-	} else {
-		spdlog::get("console")->info("{} had no ISBNs", fn);
 	}
 
-	return;
+	if (isbns.empty()) {
+		spdlog::get("console")->debug("process_file(): {} no valid isbns", fn);
+		return;
+	}
+
+	std::string isbn = "";
+	if (isbns.size() > 1) {
+		// TODO: Add CLI option for selection
+		isbn = isbns.at(0);
+	} else {
+		isbn = isbns.at(0);
+	}
+
+	auto worldcatBooks = get_by_isbn(isbn);
+	if (worldcatBooks.empty()) {
+		spdlog::get("console")->debug("process_file(): {} worldcat returned nothing", fn);
+		return;
+	}
+
+	WorldcatBook worldcatBook {};
+	if (worldcatBooks.size() > 1) {
+		// TODO: Add CLI option for selection
+		worldcatBook = worldcatBooks.at(0);
+	} else {
+		worldcatBook = worldcatBooks.at(0);
+	}
+
+	Book book {fn, std::move(isbn), std::move(worldcatBook)};
+
+	move_file(fn, book, outputDirectory, mode);
+	increment_books_organized();
 }
 
 void print_usage(const clipp::group& cli, const std::string& programName) {
@@ -238,6 +235,7 @@ int main(int argc, char* argv[]) {
 
 	if (!clipp::parse(argc, argv, cli)) {
 		print_usage(cli, argv[0]);
+		return 0;
 	}
 
 	ASSERT(!(debug && verbose));
@@ -257,40 +255,40 @@ int main(int argc, char* argv[]) {
 		mode = TransferMode::DRY_RUN;
 	}
 
-	auto curr_dir = std::filesystem::current_path();
-
-	console_log->info("gathering files...");
-
+//	auto curr_dir = std::filesystem::current_path();
+//
+//	console_log->info("gathering files...");
+//
 	auto files = std::vector<std::string>{};
-	for (auto& filepath : std::filesystem::directory_iterator(curr_dir)) {
+	for (auto& filepath : std::filesystem::directory_iterator(inDirectory)) {
 		files.push_back(filepath.path());
 	}
 
-	console_log->info("processing {} files...", files.size());
+//	console_log->info("processing {} files...", files.size());
 
-	tf::Executor executor;
 	tf::Taskflow taskflow;
+	taskflow.for_each(files.begin(), files.end(), [&](auto& fn) { process_file(fn, outDirectory, mode); });
 
-	indicators::BlockProgressBar bar{
-		indicators::option::BarWidth{80}, indicators::option::ForegroundColor{indicators::Color::white},
-		indicators::option::MaxProgress{files.size()}, indicators::option::ShowRemainingTime{true}};
-
-	if (debug) {
-		taskflow.for_each(files.begin(), files.end(), [&](auto& fn) { process_file(fn, outDirectory, mode); });
-	} else {
-		taskflow.for_each(files.begin(), files.end(), [&](auto& fn) {
-			process_file(fn, outDirectory, mode);
-			bar.tick();
-		});
-	}
-
+//	indicators::BlockProgressBar bar{
+//		indicators::option::BarWidth{80}, indicators::option::ForegroundColor{indicators::Color::white},
+//		indicators::option::MaxProgress{files.size()}, indicators::option::ShowRemainingTime{true}};
+//
+//	if (debug) {
+//	} else {
+//		taskflow.for_each(files.begin(), files.end(), [&](auto& fn) {
+//			process_file(fn, outDirectory, mode);
+//			bar.tick();
+//		});
+//	}
+//
+	tf::Executor executor;
 	executor.run(taskflow).wait();
 
-	// simple call to put spdlog below progres bar
-	puts("");
-	spdlog::set_level(spdlog::level::info);
-	console_log->info("organized {}/{}", books_organized, files.size());
-	console_log->info("done!");
+//	// simple call to put spdlog below progres bar
+//	puts("");
+//	spdlog::set_level(spdlog::level::info);
+//	console_log->info("organized {}/{}", books_organized, files.size());
+//	console_log->info("done!");
 
 	return 0;
 }
