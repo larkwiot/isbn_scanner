@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+#include <algorithm>
 #include <fstream>
 #include <map>
 #include <string>
@@ -25,13 +26,11 @@ limitations under the License.
 
 #pragma once
 
-#define u_char unsigned char
-
-std::vector<u_char> read_file_bytes(std::string& fn) {
+std::vector<char> read_file_bytes(const std::string& fn) {
 	std::ifstream fh{fn, std::ios::binary | std::ios::ate};
 
-	if (!fh == true) {
-//		spdlog::get("stderr")->error("could not open file: {}", fn);
+	if (!fh) {
+		//		spdlog::get("stderr")->error("could not open file: {}", fn);
 		exit(0);
 	}
 
@@ -44,14 +43,40 @@ std::vector<u_char> read_file_bytes(std::string& fn) {
 		return {};
 	}
 
-	std::vector<u_char> bytes(size);
+	std::vector<char> bytes(size);
 
-	if (!fh.read(reinterpret_cast<char*>(bytes.data()), bytes.size()) == true) {
-//		spdlog::get("stderr")->error("could not read file: {}", fn);
+	if (!fh.read(reinterpret_cast<char*>(bytes.data()), static_cast<long>(bytes.size()))) {
+		//		spdlog::get("stderr")->error("could not read file: {}", fn);
 		exit(0);
 	}
 
-//	spdlog::get("console")->debug("process_file(): read file {} at {} bytes", fn, fn.size());
+	//	spdlog::get("console")->debug("process_file(): read file {} at {} bytes", fn, fn.size());
+
+	return bytes;
+}
+
+std::string read_file_bytes_as_string(const std::string& fn) {
+	std::ifstream fh{fn, std::ios::binary | std::ios::ate};
+
+	if (!fh) {
+		exit(0);
+	}
+
+	auto end = fh.tellg();
+	fh.seekg(0, std::ios::beg);
+
+	auto size = std::size_t(end - fh.tellg());
+
+	if (size == 0) {
+		return {};
+	}
+
+	std::string bytes;
+	bytes.resize(size);
+
+	if (!fh.read(reinterpret_cast<char*>(bytes.data()), static_cast<long>(bytes.size()))) {
+		exit(0);
+	}
 
 	return bytes;
 }
@@ -59,20 +84,10 @@ std::vector<u_char> read_file_bytes(std::string& fn) {
 constexpr int ctoi(char c) {
 	int res = c - '0';
 	if (res < 0 || res > 9) {
-//		spdlog::get("stderr")->error("ctoi(): resulting number out of range! got {} -> {}", c, res);
+		//		spdlog::get("stderr")->error("ctoi(): resulting number out of range! got {} -> {}", c, res);
 		return res;
 	}
 	return res;
-}
-
-template <typename T, typename U>
-U noexcept_map_at(std::map<T, U>& m, T k) noexcept {
-	try {
-		return m.at(k);
-	} catch (const std::out_of_range& err) {
-//		spdlog::get("console")->debug("noexcept_map_at(): {} not in {}", k, m);
-		return {};
-	}
 }
 
 static std::unordered_set<char> filter_chars = {',', '.', '\'', '|', '-'};
@@ -80,7 +95,7 @@ static std::unordered_set<char> filter_chars = {',', '.', '\'', '|', '-'};
 static std::unordered_map<char, char> replace_chars = {{' ', '_'}, {':', '-'}};
 
 std::string clean_name(std::string const& name) {
-	std::string cleaned = "";
+	std::string cleaned;
 
 	for (auto c : name) {
 		if (filter_chars.contains(c)) {
@@ -99,35 +114,29 @@ const std::unordered_set<char> isbn_chars = {'0', '1', '2', '3', '4', '5', '6', 
 
 static constexpr auto all_one_char = ctll::fixed_string{"(.)\\1+"};
 
-bool is_valid_isbn(std::string isbn) {
-	/* spdlog::get("console")->debug("is_valid_isbn(): raw ISBN: {}", _isbn); */
+tao::tuple<bool, std::string> is_valid_isbn(std::string isbn) {
+//	spdlog::get("console")->debug("is_valid_isbn(): raw ISBN: {}", isbn);
+
+	std::erase_if(isbn, [](char c) { return !isbn_chars.contains(c); });
 
 	if (ctre::match<all_one_char>(isbn)) {
-		return false;
+		return tao::make_tuple(false, std::string{});
 	}
 
-	// TODO: make this line work instead of the below
-	/* _isbn = std::erase_if(_isbn, is_not_isbn_char); */
-	{
-		std::string new_isbn = "";
-		for (auto c : isbn) {
-			if (isbn_chars.contains(c)) {
-				new_isbn += c;
-			}
-		}
-		isbn = new_isbn;
+	if (isbn == "0123456789") {
+		return tao::make_tuple(false, std::string{});
 	}
-
-	/* spdlog::get("console")->debug("is_valid_isbn(): cleaned ISBN: {}", _isbn); */
 
 	if (isbn.length() == 10) {
+		spdlog::get("console")->debug("is_valid_isbn(): cleaned ISBN: {}", isbn);
+
 		int multiplier = 10;
 		int sum = 0;
 
 		auto isbn_end = isbn.end();
 		for (auto di = isbn.begin(); di != isbn_end; ++di) {
 			if (multiplier < 1) {
-//				spdlog::get("stderr")->error("is_valid_isbn(): tried to use ISBN 10 multiplier < 2! ISBN: {}", isbn);
+				spdlog::get("stderr")->error("is_valid_isbn(): tried to use ISBN 10 multiplier < 2! ISBN: {}", isbn);
 			}
 
 			auto d = *di;
@@ -136,8 +145,8 @@ bool is_valid_isbn(std::string isbn) {
 				if (di == isbn_end - 1) {
 					sum += multiplier * 10;
 				} else {
-					/* spdlog::get("console")->debug("is_valid_isbn(): ISBN {} had X not at end", _isbn); */
-					return false;
+					spdlog::get("console")->debug("is_valid_isbn(): ISBN {} had X not at end", isbn);
+					return tao::tuple<bool, std::string>{false, ""};
 				}
 			} else {
 				sum += multiplier * ctoi(d);
@@ -147,48 +156,50 @@ bool is_valid_isbn(std::string isbn) {
 		}
 
 		if (sum % 11 == 0) {
-			return true;
+			return tao::make_tuple(true, isbn);
+			return tao::make_tuple(true, isbn);
 		}
 
-		/* spdlog::get("console")->debug("is_valid_isbn(): ISBN {} invalid ISBN 10 checksum", _isbn); */
+		spdlog::get("console")->debug("is_valid_isbn(): ISBN {} invalid ISBN 10 checksum", isbn);
 
-		return false;
+		return tao::make_tuple(false, std::string{});
+
 	} else if (isbn.length() == 13) {
+		spdlog::get("console")->debug("is_valid_isbn(): cleaned ISBN: {}", isbn);
+
 		auto first_12 = isbn.substr(0, 12);
 		unsigned long check_digit = 0;
 		try {
 			check_digit = std::stoul(isbn.substr(12));
-		} catch (const std::invalid_argument err) {
-			/* spdlog::get("console")->debug("ISBN {} cannot be converted to number", _isbn.substr(12)); */
-			return false;
+		} catch (const std::invalid_argument& err) {
+			spdlog::get("console")->debug("ISBN {} cannot be converted to number", isbn.substr(12));
+			return tao::make_tuple(false, std::string{});
 		}
-		int one = 1;
-		int three = 3;
-		int multiplier = one;
+		int multiplier = 1;
 		int sum = 0;
 
 		for (auto c : first_12) {
 			sum += multiplier * ctoi(c);
-			// swap values for mulitiplier
-			multiplier ^= one ^ three;
+			// swap values for multiplier
+			multiplier ^= 1 ^ 3;
 		}
 
 		int remainder = sum % 10;
 
 		if (remainder == 0 && check_digit == 0) {
-			return true;
+			return tao::tuple<bool, std::string>{true, isbn};
 		}
 
 		if (std::cmp_equal((10 - remainder), check_digit)) {
-			return true;
+			return tao::tuple<bool, std::string>{true, isbn};
 		}
 
-		/* spdlog::get("console")->debug("is_valid_isbn(): ISBN {} invalid ISBN 13 checksum", _isbn); */
+		spdlog::get("console")->debug("is_valid_isbn(): ISBN {} invalid ISBN 13 checksum", isbn);
 
-		return false;
+		return tao::make_tuple(false, std::string{});
 	}
 
-	/* spdlog::get("console")->debug("is_valid_isbn(): ISBN {} is not a valid length", _isbn); */
+//	spdlog::get("console")->debug("is_valid_isbn(): ISBN {} is not a valid length", isbn);
 
-	return false;
+	return tao::make_tuple(false, std::string{});
 }

@@ -14,9 +14,7 @@
       "installDir": "${sourceDir}/out/install/${presetName}",
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang",
-        "CMAKE_CXX_COMPILER": "clang++",
-        "ROARING_LINK_STATIC": "ON",
-        "ROARING_BUILD_LTO": "ON"
+        "CMAKE_CXX_COMPILER": "clang++"
       }
     },
     {
@@ -26,18 +24,25 @@
       "inherits": "common",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_FLAGS": "-Wall -Wextra -Wconversion -Wno-unused-command-line-argument -fuse-ld=mold -Wl,--gc-sections,-z,noexecstack -Og -g3 -glldb -fsanitize=address",
-        "SIMDJSON_DEVELOPMENT_CHECKS": "ON",
-        "SIMDJSON_SANITIZE": "ON"
+        "CMAKE_CXX_FLAGS": "-Wall -Wextra -Wconversion -Wno-unused-command-line-argument -fuse-ld=mold -Wl,--gc-sections,-z,noexecstack -Og -g3 -fsanitize=address,undefined"
       }
     },
     {
       "name": "Release",
       "displayName": "Release",
-      "description": "Release mode with optimizations",
+      "description": "Release mode with all native, local optimizations",
       "inherits": "common",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS": "-Wall -Wextra -Wconversion -Wno-unused-command-line-argument -fuse-ld=mold -Wl,--gc-sections,-z,noexecstack -O2 -flto -march=native"
+      }
+    },
+    {
+      "name": "Distributable",
+      "displayName": "Distributable",
+      "description": "Release mode with only portable optimizations",
+      "inherits": "Release",
+      "cacheVariables": {
         "CMAKE_CXX_FLAGS": "-Wall -Wextra -Wconversion -Wno-unused-command-line-argument -fuse-ld=mold -Wl,--gc-sections,-z,noexecstack -O2 -flto"
       }
     }

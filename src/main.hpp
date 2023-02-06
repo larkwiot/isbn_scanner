@@ -16,10 +16,10 @@
 
 #include <filesystem>
 #include <iostream>
+#include <fstream>
 #include <map>
 #include <string>
 #include <unordered_set>
-#include <mutex>
 
 #include <assert.hpp>
 
@@ -29,20 +29,26 @@
 #include <clipp.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+
 //#include <fmt/ranges.h>
 #include <ctre.hpp>
 #include <pugixml.hpp>
 #include <indicators/block_progress_bar.hpp>
 #include <nlohmann/json.hpp>
 #include <taskflow.hpp>
+#include <unordered_set>
 #include <tao/tuple/tuple.hpp>
 
-//#define TOML_HEADER_ONLY 0
-//#define TOML_IMPLEMENTATION
-//#include <toml++/toml.h>
+#define TOML_HEADER_ONLY 0
+#define TOML_IMPLEMENTATION
+#include <toml++/toml.h>
 
 #include "util.hpp"
+#include "thread_safe_file.hpp"
 #include "book.hpp"
+#include "version.hpp"
+
+#pragma once
 
 using json = nlohmann::json;
 

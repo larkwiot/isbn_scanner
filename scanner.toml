@@ -1,0 +1,11 @@
+[tika]
+host = "localhost"
+port = 9998
+
+[worldcat]
+host = "classify.oclc.org"
+port = 80
+path = "/classify2/Classify"
+
+[option]
+max_characters_to_search = 10000

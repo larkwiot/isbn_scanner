@@ -83,4 +83,15 @@ class Book {
 	std::string get_author() const {
 		return clean_name(_author);
 	}
+
+	json to_json() const {
+		return {
+			{"filepath", _filepath},
+			{"isbn", _isbn},
+			{"author", _author},
+			{"title", _title},
+			{"low_year", _lowYear},
+			{"high_year", _highYear}
+		};
+	}
 };

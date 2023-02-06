@@ -1,0 +1,7 @@
+{
+  "pdf": "application/pdf",
+  "epub": "application/epub+zip",
+  "doc": "application/msword",
+  "docx": "application/application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "mobi": "application/x-mobipocket-ebook"
+}

@@ -5,12 +5,12 @@ project(ISBNScanner VERSION 0.1 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-add_executable(scanner src/main.cpp src/main.hpp src/book.hpp)
-
-#include(cmake/Findluajit.cmake)
-#target_link_libraries(scanner PRIVATE ${LUAJIT_LIBRARY})
+add_executable(scanner src/main.cpp src/main.hpp src/book.hpp src/thread_safe_file.hpp)
 
 include(cmake/CPM.cmake)
+
+find_library(pugixml NAMES libpugixml.so REQUIRED)
+target_link_libraries(scanner PRIVATE pugixml)
 
 target_link_libraries(scanner PRIVATE dl)
 CPMAddPackage(NAME libassert GITHUB_REPOSITORY jeremy-rifkin/libassert GIT_TAG v1.1 DOWNLOAD_ONLY YES)
@@ -24,15 +24,6 @@ CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 9.1.0)
 target_link_libraries(scanner PRIVATE fmt::fmt-header-only)
 CPMAddPackage(NAME spdlog GITHUB_REPOSITORY gabime/spdlog GIT_TAG v1.11.0 OPTIONS "SPDLOG_FMT_EXTERNAL_HO ON")
 target_link_libraries(scanner PRIVATE spdlog::spdlog_header_only)
-
-#CPMAddPackage(NAME sol2 GITHUB_REPOSITORY ThePhD/sol2 GIT_TAG v3.3.0 DOWNLOAD_ONLY YES)
-#add_library(sol2 INTERFACE IMPORTED)
-#target_include_directories(sol2 INTERFACE ${sol2_SOURCE_DIR}/include ${LUAJIT_INCLUDE_DIR})
-#target_link_libraries(sol2 INTERFACE ${LUAJIT_LIBRARY})
-#target_link_libraries(scanner PRIVATE sol2)
-
-#CPMAddPackage("gh:libcpr/cpr#1.10.0")
-#target_link_libraries(scanner PRIVATE cpr::cpr)
 
 CPMAddPackage(NAME httplib GITHUB_REPOSITORY yhirose/cpp-httplib GIT_TAG v0.11.4 DOWNLOAD_ONLY YES)
 add_library(httplib INTERFACE IMPORTED)
@@ -64,9 +55,6 @@ CPMAddPackage(NAME ctre GITHUB_REPOSITORY "hanickadot/compile-time-regular-expre
 add_library(ctre INTERFACE IMPORTED)
 target_include_directories(ctre INTERFACE ${ctre_SOURCE_DIR}/single-header)
 target_link_libraries(scanner PRIVATE ctre)
-
-CPMAddPackage("gh:zeux/pugixml#v1.13")
-target_link_libraries(scanner PRIVATE pugixml)
 
 CPMAddPackage("gh:p-ranav/indicators#v2.2")
 target_link_libraries(scanner PRIVATE indicators)

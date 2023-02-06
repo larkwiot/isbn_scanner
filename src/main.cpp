@@ -16,21 +16,18 @@
 
 #include "main.hpp"
 
-static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-]{9,15}[0-9X])"};
+struct API {
+	std::string tika_host;
+	int tika_port;
+	std::string worldcat_host;
+	std::string worldcat_path;
+	int worldcat_port;
+};
 
-static std::string tika_url = "http://localhost:9998";
-static std::string worldcat_url = "http://classify.oclc.org/classify2/Classify";
+static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-\\s]+[0-9X])"};
+static constexpr auto file_extension_pattern = ctll::fixed_string{"\\.([^\\.]+)$"};
 
-static size_t books_organized = 0;
-static std::mutex books_organized_lock{};
-
-void increment_books_organized() {
-	books_organized_lock.lock();
-	books_organized++;
-	books_organized_lock.unlock();
-}
-
-auto find_isbns(std::string& text) {
+auto find_isbns(const std::string& text) {
 	auto matches = std::set<std::string>{};
 	for (auto match : ctre::range<isbn_pattern>(text)) {
 		matches.emplace(match.get<0>());
@@ -38,20 +35,42 @@ auto find_isbns(std::string& text) {
 	return matches;
 }
 
-std::string get_file_text(std::string& fn) {
-	auto client = httplib::Client(tika_url);
+std::string get_file_extension(const std::string& fn) {
+	auto match = ctre::search<file_extension_pattern>(fn);
+	if (match) {
+		return match.get<1>().to_string();
+	}
+	return "";
+}
 
-	auto filebytes = read_file_bytes(fn);
+std::string get_file_text(const std::string& tika_host, int tika_port, const std::string& fn, const json& filetypes) {
+	auto ext = get_file_extension(fn);
+	if (ext.empty()) {
+		spdlog::get("console")->warn("skipping {} because it does not have a file extension", fn);
+		return "";
+	}
 
-	auto form = httplib::MultipartFormDataItems {
-		{"upload", "", fn, "application/octet-stream"}
-	};
+	if (!filetypes.contains(ext)) {
+		spdlog::get("console")->warn("skipping {} because no mime type is known for the extension {}", fn, ext);
+		return "";
+	}
 
-	auto headers = httplib::Headers {
-		{"Accept", "*/*"}
-	};
+	const auto mime_type = filetypes[ext].get<std::string>();
 
-	auto resp = client.Post("/tika/form", headers, form);
+	auto client = httplib::Client(tika_host, tika_port);
+
+	const auto content = read_file_bytes_as_string(fn);
+
+	auto form =
+		httplib::MultipartFormDataItems{//		httplib::MultipartFormDataProvider {"upload", reader, fn, mime_type}
+										httplib::MultipartFormData{"upload", content, fn, mime_type}};
+
+	auto resp = client.Post("/tika/form", form);
+
+	if (!resp) {
+		spdlog::get("console")->debug("get_file_text(): request failed: {}", httplib::to_string(resp.error()));
+		return "";
+	}
 
 	if (resp->status != 200) {
 		spdlog::get("console")->debug("get_file_text(): could not get text for file: {}", fn);
@@ -59,27 +78,6 @@ std::string get_file_text(std::string& fn) {
 	}
 
 	return resp->body;
-}
-
-json get_file_metadata(std::string& fn, const std::string& filetext) {
-	auto client = httplib::Client(tika_url);
-
-	auto form = httplib::MultipartFormDataItems {
-		{"upload", filetext, "", ""}
-	};
-
-	auto headers = httplib::Headers {
-		{"Accept", "application/json"}
-	};
-
-	auto resp = client.Post("/meta/form", headers, form);
-
-	if (resp->status != 200) {
-		spdlog::get("console")->debug("get_file_metadata(): could not get metadata for file: {}", fn);
-		return {};
-	}
-
-	return json{resp->body};
 }
 
 std::vector<WorldcatBook> parse_worldcat_data(std::string worldcat_xml) {
@@ -91,9 +89,26 @@ std::vector<WorldcatBook> parse_worldcat_data(std::string worldcat_xml) {
 		return {};
 	}
 
-	std::vector<WorldcatBook> books {};
+	const auto classify = doc.child("classify");
 
-	for (auto work : doc.child("classify").child("works").children("work")) {
+	if (!classify.child("work").empty()) {
+		const auto work = classify.child("work");
+
+		const auto author = work.attribute("author").value();
+		const auto title = work.attribute("title").value();
+		const auto lowYear = work.attribute("lyr").value();
+		const auto highYear = work.attribute("hyr").value();
+		return {WorldcatBook{author, title, lowYear, highYear}};
+	}
+
+	if (classify.child("works").empty()) {
+		spdlog::get("console")->debug("parse_worldcat_data(): worldcat had no result:\n{}", worldcat_xml);
+		return {};
+	}
+
+	std::vector<WorldcatBook> books{};
+
+	for (auto work : classify.child("works").children("work")) {
 		const auto author = work.attribute("author").value();
 		const auto title = work.attribute("title").value();
 		const auto lowYear = work.attribute("lyr").value();
@@ -106,80 +121,58 @@ std::vector<WorldcatBook> parse_worldcat_data(std::string worldcat_xml) {
 	return books;
 }
 
-std::vector<WorldcatBook> get_by_isbn(std::string const& isbn) {
-	auto client = httplib::Client(worldcat_url);
+std::vector<WorldcatBook> get_by_isbn(const std::string& worldcat_host,
+									  const std::string& worldcat_path,
+									  int worldcat_port,
+									  std::string const& isbn) {
+	auto client = httplib::Client(worldcat_host, worldcat_port);
 
-	auto resp = client.Get(fmt::format("_isbn={}&summary=true", isbn));
+	auto resp = client.Get(fmt::format("{}?isbn={}", worldcat_path, isbn));
+
+	if (!resp) {
+		spdlog::get("console")->debug("get_by_isbn(): request failed: {}", to_string(resp.error()));
+		return {};
+	}
 
 	if (resp->status != 200) {
-		spdlog::get("console")->debug("get_by_isbn(): could not request metadata for ISBN: {}", isbn);
+		spdlog::get("console")->debug("get_by_isbn(): could not request metadata for ISBN: {} status: {} path: {}",
+									  isbn, resp->status, resp->location);
 		return {};
 	}
 	return parse_worldcat_data(resp->body);
 }
 
-//std::vector<WorldcatBook> get_by_title(std::string const& title) {
-//	auto resp = cpr::Get(cpr::Url{worldcat_url}, cpr::Parameters{{"title", title}, {"summary", "true"}});
-//
-//	if (resp.status_code != 200) {
-//		spdlog::get("console")->debug("get_by_title(): could not request metadata for title: {}", title);
-//	}
-//
-//	return parse_worldcat_data(resp.text);
-//}
-
-void move_file(std::string& fn, Book const& book, const std::string& outputDirectory, TransferMode mode) {
-	auto new_fn = book.get_new_filename();
-
-	std::string output_dir = outputDirectory;
-
-	std::string operation = "dry ran";
-	std::filesystem::path target_dir{output_dir};
-	std::filesystem::path target_file{new_fn};
-	std::filesystem::path target = target_dir / target_file;
-
-	switch (mode) {
-		case TransferMode::MOVE:
-			std::filesystem::copy(fn, target);
-			std::filesystem::remove(fn);
-			break;
-		case TransferMode::COPY:
-			std::filesystem::copy(fn, target);
-			break;
-		case TransferMode::DRY_RUN:
-			break;
-	}
-
-	spdlog::get("console")->info("{} file {} to {}", operation, fn, target.string());
-}
-
-void process_file(std::string& fn, const std::string& outputDirectory, TransferMode mode) {
-	/* spdlog::get("console")->debug("process_file(): working on {}", fn); */
-	std::string filetext = get_file_text(fn);
+void process_file(const std::string& filepath, size_t max_chars, ThreadSafeFile& outJson, const json& filetypes, const API& api) {
+//	spdlog::get("console")->info("process_file(): working on {}", filepath);
+	const auto filetext = get_file_text(api.tika_host, api.tika_port, filepath, filetypes);
 	if (filetext.empty()) {
-		spdlog::get("console")->debug("process_file(): {} got no text", fn);
+		spdlog::get("console")->debug("process_file(): {} got no text", filepath);
 		return;
 	}
+	spdlog::get("console")->debug("process_file(): {} got file text", filepath);
 
-	const auto found_isbns = find_isbns(filetext);
+	const auto found_isbns = find_isbns(filetext.substr(0, max_chars));
 	if (found_isbns.empty()) {
-		spdlog::get("console")->debug("process_file(): {} no found_isbns", fn);
+		spdlog::get("console")->debug("process_file(): {} no found_isbns", filepath);
 		return;
 	}
 
-	std::vector<std::string> isbns {};
-	for (auto isbn : found_isbns) {
-		if (is_valid_isbn(isbn)) {
-			isbns.push_back(isbn);
+	std::vector<std::string> isbns{};
+	for (const auto& isbn : found_isbns) {
+		const auto result = is_valid_isbn(isbn);
+		bool is_valid = get<0>(result);
+		std::string cleaned_isbn = get<1>(result);
+		if (is_valid) {
+			isbns.push_back(cleaned_isbn);
 		}
 	}
 
 	if (isbns.empty()) {
-		spdlog::get("console")->debug("process_file(): {} no valid isbns", fn);
+		spdlog::get("console")->info("process_file(): {} no valid isbns", filepath);
 		return;
 	}
 
-	std::string isbn = "";
+	std::string isbn;
 	if (isbns.size() > 1) {
 		// TODO: Add CLI option for selection
 		isbn = isbns.at(0);
@@ -187,13 +180,13 @@ void process_file(std::string& fn, const std::string& outputDirectory, TransferM
 		isbn = isbns.at(0);
 	}
 
-	auto worldcatBooks = get_by_isbn(isbn);
+	auto worldcatBooks = get_by_isbn(api.worldcat_host, api.worldcat_path, api.worldcat_port, isbn);
 	if (worldcatBooks.empty()) {
-		spdlog::get("console")->debug("process_file(): {} worldcat returned nothing", fn);
+		spdlog::get("console")->debug("process_file(): {} worldcat returned nothing", filepath);
 		return;
 	}
 
-	WorldcatBook worldcatBook {};
+	WorldcatBook worldcatBook{};
 	if (worldcatBooks.size() > 1) {
 		// TODO: Add CLI option for selection
 		worldcatBook = worldcatBooks.at(0);
@@ -201,10 +194,13 @@ void process_file(std::string& fn, const std::string& outputDirectory, TransferM
 		worldcatBook = worldcatBooks.at(0);
 	}
 
-	Book book {fn, std::move(isbn), std::move(worldcatBook)};
+	Book book{filepath, std::move(isbn), std::move(worldcatBook)};
 
-	move_file(fn, book, outputDirectory, mode);
-	increment_books_organized();
+	auto book_json = book.to_json();
+
+	outJson.write(book_json.dump(4) + ",");
+
+	spdlog::get("console")->info("process_file(): successfully processed {}", filepath);
 }
 
 void print_usage(const clipp::group& cli, const std::string& programName) {
@@ -214,6 +210,15 @@ void print_usage(const clipp::group& cli, const std::string& programName) {
 	}
 }
 
+std::string get_feature_string() {
+#ifndef NDEBUG
+	std::string build = "debug";
+#else
+	std::string build = "release";
+#endif
+	return fmt::format("Features: {} build", build);
+}
+
 int main(int argc, char* argv[]) {
 	auto console_log = spdlog::stdout_color_mt("console");
 	auto error_log = spdlog::stdout_color_mt("stderr");
@@ -221,20 +226,31 @@ int main(int argc, char* argv[]) {
 
 	bool debug = false;
 	bool verbose = false;
-	std::string inDirectory = "";
-	std::string outDirectory = "";
-	bool move = false;
-	bool dryRun = false;
+	std::string inDirectory;
+	std::string outJson;
+	bool version = false;
+	std::string filetypesJsonPath;
+	std::string configFilepath;
 
-	auto cli = clipp::group(clipp::option("-o", "--output").set(outDirectory).doc("output directory"),
-							clipp::option("-i", "--input").set(inDirectory).doc("input directory"),
-							clipp::option("-d", "--debug").set(debug).doc("debug logging"),
-							clipp::option("-v", "--verbose").set(verbose).doc("verbose logging"),
-							clipp::option("-m", "--move").set(move).doc("move instead of copy"),
-							clipp::option("--dry-run").set(dryRun).doc("simulate process without actually copying or moving any files"));
+	auto cli =
+		clipp::group((clipp::required("-i", "--input") & clipp::value("input directory", inDirectory)),
+					 (clipp::required("-o", "--output") & clipp::value("output JSON file", outJson)),
+					 clipp::option("-d", "--debug").set(debug).doc("enable debug logging"),
+					 clipp::option("-v", "--verbose").set(verbose).doc("enable verbose logging"),
+					 clipp::option("--version").set(version).doc("print version and feature info"),
+					 (clipp::required("-f", "--filetypes") &
+					  clipp::value("file types (mime types) JSON database", filetypesJsonPath)),
+					 (clipp::required("-c", "--config") & clipp::value("configuration TOML filepath", configFilepath)));
 
-	if (!clipp::parse(argc, argv, cli)) {
+	auto res = clipp::parse(argc, argv, cli);
+
+	if (res.any_error()) {
 		print_usage(cli, argv[0]);
+		return 0;
+	}
+
+	if (version) {
+		fmt::print("ISBN Scanner v{}\n{}\n", VERSION, get_feature_string());
 		return 0;
 	}
 
@@ -247,48 +263,67 @@ int main(int argc, char* argv[]) {
 		console_log->set_level(spdlog::level::debug);
 	}
 
-	TransferMode mode = TransferMode::COPY;
-	if (move) {
-		mode = TransferMode::MOVE;
-	}
-	if (dryRun) {
-		mode = TransferMode::DRY_RUN;
+	json filetypes;
+	try {
+		std::ifstream filetypesJson(filetypesJsonPath);
+		filetypes = json::parse(filetypesJson);
+		filetypesJson.close();
+	} catch (const std::exception& err) {
+		error_log->error("could not open {} for filetypes (MIME types)", filetypesJsonPath);
+		return 0;
 	}
 
-//	auto curr_dir = std::filesystem::current_path();
-//
-//	console_log->info("gathering files...");
-//
+	std::unordered_set<std::string> processed_files{};
+	json previousBooks;
+	try {
+		std::ifstream previousOutput(outJson);
+		previousBooks = json::parse(previousOutput);
+		for (auto& previousBook : previousBooks) {
+			ASSERT(previousBook.is_object());
+			processed_files.insert(previousBook["filepath"]);
+		}
+		previousOutput.close();
+	} catch (const std::exception& err) {
+	}
+
+	ThreadSafeFile outputJson{outJson};
+	outputJson.write("[\n");
+
+	auto config = toml::parse_file(configFilepath);
+
+	auto max_chars = config["option"]["max_characters_to_search"].value<long>().value();
+	ASSERT(max_chars > 0);
+
+	auto tika_host = config["tika"]["host"].value<std::string>();
+	auto tika_port = config["tika"]["port"].value<int>();
+	auto worldcat_host = config["worldcat"]["host"].value<std::string>();
+	auto worldcat_path = config["worldcat"]["path"].value<std::string>();
+	auto worldcat_port = config["worldcat"]["port"].value<int>();
+
+	API api{tika_host.value(), tika_port.value(), worldcat_host.value(), worldcat_path.value(), worldcat_port.value()};
+
 	auto files = std::vector<std::string>{};
 	for (auto& filepath : std::filesystem::directory_iterator(inDirectory)) {
 		files.push_back(filepath.path());
 	}
 
-//	console_log->info("processing {} files...", files.size());
-
-	tf::Taskflow taskflow;
-	taskflow.for_each(files.begin(), files.end(), [&](auto& fn) { process_file(fn, outDirectory, mode); });
-
-//	indicators::BlockProgressBar bar{
-//		indicators::option::BarWidth{80}, indicators::option::ForegroundColor{indicators::Color::white},
-//		indicators::option::MaxProgress{files.size()}, indicators::option::ShowRemainingTime{true}};
-//
-//	if (debug) {
-//	} else {
-//		taskflow.for_each(files.begin(), files.end(), [&](auto& fn) {
-//			process_file(fn, outDirectory, mode);
-//			bar.tick();
-//		});
-//	}
-//
-	tf::Executor executor;
+	tf::Executor executor{};
+	tf::Taskflow taskflow{};
+	taskflow.for_each(files.begin(), files.end(), [&](const auto& filepath) {
+		if (processed_files.contains(filepath)) {
+			spdlog::get("console")->info("skipping {} because it was processed on a previous run", filepath);
+			return;
+		}
+		process_file(filepath, static_cast<size_t>(max_chars), outputJson, filetypes, api);
+	});
 	executor.run(taskflow).wait();
 
-//	// simple call to put spdlog below progres bar
-//	puts("");
-//	spdlog::set_level(spdlog::level::info);
-//	console_log->info("organized {}/{}", books_organized, files.size());
-//	console_log->info("done!");
+	for (const auto& previousBook : previousBooks) {
+		outputJson.write(previousBook.dump(4) + ",");
+	}
+
+	outputJson.step_back_one_char();
+	outputJson.write("\n]");
 
 	return 0;
 }
