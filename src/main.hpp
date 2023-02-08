@@ -43,9 +43,9 @@
 #define TOML_IMPLEMENTATION
 #include <toml++/toml.h>
 
-#include "util.hpp"
-#include "thread_safe_file.hpp"
 #include "book.hpp"
+#include "lockable.hpp"
+#include "util.hpp"
 #include "version.hpp"
 
 #pragma once

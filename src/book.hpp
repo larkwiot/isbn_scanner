@@ -14,84 +14,48 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-#include <fmt/core.h>
-#include <string>
-#include <filesystem>
 #include <nlohmann/json.hpp>
-
-#include "util.hpp"
+#include <string>
 
 #pragma once
 
 using json = nlohmann::json;
 
-struct WorldcatBook {
-	std::string _author;
-	std::string _title;
-	std::string _lowYear;
-	std::string _highYear;
+struct Book {
+	std::string isbn;
+	std::string author;
+	std::string title;
+	long lowYear{};
+	long highYear{};
+	std::string filepath;
 
-	WorldcatBook() = default;
-	explicit WorldcatBook(std::string&& author, std::string&& title, std::string&& lowYear, std::string&& highYear)
-		: _author(author), _title(title), _lowYear(lowYear), _highYear(highYear) {};
-	~WorldcatBook() noexcept(false) = default;
-};
-
-class Book {
-	std::filesystem::path _filepath;
-	std::string _isbn;
-	std::string _title;
-	std::string _author;
-	std::string _lowYear;
-	std::string _highYear;
-
-   public:
 	Book() = default;
-	Book(std::filesystem::path&& filepath, std::string&& isbn, WorldcatBook&& worldcatBook) {
-		_filepath = filepath;
-		_isbn = isbn;
-		_author = worldcatBook._author;
-		_title = worldcatBook._title;
-		_lowYear = worldcatBook._lowYear;
-		_highYear = worldcatBook._highYear;
-	}
-	Book(Book&& book) noexcept(false) {
-		_isbn = book._isbn;
-		_author = book._author;
-		_title = book._title;
-		_lowYear = book._lowYear;
-		_highYear = book._highYear;
-	}
+	explicit Book(std::string&& _isbn,
+				  std::string&& _author,
+				  std::string&& _title,
+				  long _lowYear,
+				  long _highYear,
+				  std::string&& _filepath)
+		: isbn(_isbn), author(_author), title(_title), lowYear(_lowYear), highYear(_highYear), filepath(_filepath){};
 	~Book() noexcept(false) = default;
 
-	std::string get_new_filename() const {
-		return fmt::format("{}_{}_{}", _isbn, get_title(), get_author());
-	}
-
-	bool is_info_complete() const {
-		return !_author.empty() && !_title.empty() && !_lowYear.empty() && !_highYear.empty();
-	}
-
-	std::string get_isbn() const {
-		return _isbn;
-	}
-
-	std::string get_title() const {
-		return clean_name(_title);
-	}
-
-	std::string get_author() const {
-		return clean_name(_author);
-	}
-
 	json to_json() const {
-		return {
-			{"filepath", _filepath},
-			{"isbn", _isbn},
-			{"author", _author},
-			{"title", _title},
-			{"low_year", _lowYear},
-			{"high_year", _highYear}
-		};
+		return {{"filepath", filepath}, {"isbn", isbn},		   {"author", author},
+				{"title", title},		{"low_year", lowYear}, {"high_year", highYear}};
+	}
+
+	bool operator==(const Book& other) const {
+		return isbn == other.isbn && author == other.author && title == other.title && lowYear == other.lowYear &&
+			   highYear == other.highYear && filepath == other.filepath;
 	}
 };
+
+// define std::hash<Book>()(book) so it can go in unordered_set;
+namespace std {
+template <>
+struct hash<Book> {
+	size_t operator()(const Book& book) const {
+		return std::hash<std::string>()(book.to_json().dump());
+	}
+};
+}  // namespace std

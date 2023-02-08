@@ -203,3 +203,22 @@ tao::tuple<bool, std::string> is_valid_isbn(std::string isbn) {
 
 	return tao::make_tuple(false, std::string{});
 }
+
+static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-\\s]+[0-9X])"};
+static constexpr auto file_extension_pattern = ctll::fixed_string{"\\.([^\\.]+)$"};
+
+auto find_isbns(const std::string& text) {
+	auto matches = std::set<std::string>{};
+	for (auto match : ctre::range<isbn_pattern>(text)) {
+		matches.emplace(match.get<0>());
+	}
+	return matches;
+}
+
+std::string get_file_extension(const std::string& fn) {
+	auto match = ctre::search<file_extension_pattern>(fn);
+	if (match) {
+		return match.get<1>().to_string();
+	}
+	return "";
+}

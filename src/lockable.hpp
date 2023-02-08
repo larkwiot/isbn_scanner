@@ -14,45 +14,30 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-#include <string>
-#include <filesystem>
-#include <fstream>
+//#include <string>
+//#include <filesystem>
+//#include <fstream>
 #include <mutex>
 #include <utility>
+#include <functional>
 
 #pragma once
 
-class ThreadSafeFile {
+template <typename T>
+class Lockable {
 	std::mutex _mutex {};
-	std::ofstream output;
+	T _item;
 
    public:
-	std::filesystem::path _filepath;
-
-	ThreadSafeFile() = default;
-	explicit ThreadSafeFile(std::filesystem::path filepath) {
-		_filepath = std::move(filepath);
-		output = {_filepath};
-		_mutex.unlock();
-	};
-	~ThreadSafeFile() noexcept(false) {
-		output.close();
+	Lockable() = default;
+	explicit Lockable(T&& item) : _item(item) {};
+	~Lockable() noexcept(false) {
 		_mutex.unlock();
 	};
 
-	void write(const std::string& text) {
+	void use(const std::function<void(T&)>& function) {
 		_mutex.lock();
-
-		output.write(text.data(), static_cast<long>(text.size()));
-
-		_mutex.unlock();
-	}
-
-	void step_back_one_char() {
-		_mutex.lock();
-
-		output.seekp(-1, std::ios_base::end);
-
+		function(_item);
 		_mutex.unlock();
 	}
 };

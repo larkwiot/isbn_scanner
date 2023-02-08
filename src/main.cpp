@@ -24,23 +24,67 @@ struct API {
 	int worldcat_port;
 };
 
-static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-\\s]+[0-9X])"};
-static constexpr auto file_extension_pattern = ctll::fixed_string{"\\.([^\\.]+)$"};
+std::unordered_set<Book> parse_worldcat_data(const std::string& worldcat_xml) {
+	pugi::xml_document doc;
+	pugi::xml_parse_result result = doc.load_string(worldcat_xml.c_str());
 
-auto find_isbns(const std::string& text) {
-	auto matches = std::set<std::string>{};
-	for (auto match : ctre::range<isbn_pattern>(text)) {
-		matches.emplace(match.get<0>());
+	if (!result) {
+		spdlog::get("console")->debug("parse_worldcat_data(): could not parse XML:\n{}", worldcat_xml);
+		return {};
 	}
-	return matches;
+
+	const auto classify = doc.child("classify");
+
+	if (!classify.child("work").empty()) {
+		const auto work = classify.child("work");
+
+		const auto author = work.attribute("author").value();
+		const auto title = work.attribute("title").value();
+		const auto lowYear = work.attribute("lyr").value();
+		const auto highYear = work.attribute("hyr").value();
+
+		std::unordered_set<Book> book {};
+		book.emplace("", author, title, std::stol(lowYear), std::stol(highYear), "");
+		return book;
+	}
+
+	if (classify.child("works").empty()) {
+		spdlog::get("console")->debug("parse_worldcat_data(): worldcat had no result");
+		return {};
+	}
+
+	std::unordered_set<Book> books{};
+
+	for (auto work : classify.child("works").children("work")) {
+		const auto author = work.attribute("author").value();
+		const auto title = work.attribute("title").value();
+		const auto lowYear = work.attribute("lyr").value();
+		const auto highYear = work.attribute("hyr").value();
+		books.emplace("", author, title, std::stol(lowYear), std::stol(highYear), "");
+	}
+
+	return books;
 }
 
-std::string get_file_extension(const std::string& fn) {
-	auto match = ctre::search<file_extension_pattern>(fn);
-	if (match) {
-		return match.get<1>().to_string();
+std::unordered_set<Book> get_by_isbn(const std::string& worldcat_host,
+									  const std::string& worldcat_path,
+									  int worldcat_port,
+									  const std::string& isbn) {
+	auto client = httplib::Client(worldcat_host, worldcat_port);
+
+	auto resp = client.Get(fmt::format("{}?isbn={}", worldcat_path, isbn));
+
+	if (!resp) {
+		spdlog::get("console")->debug("get_by_isbn(): could not reach worldcat, request failed: {}", to_string(resp.error()));
+		return {};
 	}
-	return "";
+
+	if (resp->status != 200) {
+		spdlog::get("console")->debug("get_by_isbn(): could not request metadata for ISBN: {} status: {} path: {}",
+									  isbn, resp->status, resp->location);
+		return {};
+	}
+	return parse_worldcat_data(resp->body);
 }
 
 std::string get_file_text(const std::string& tika_host, int tika_port, const std::string& fn, const json& filetypes) {
@@ -62,13 +106,12 @@ std::string get_file_text(const std::string& tika_host, int tika_port, const std
 	const auto content = read_file_bytes_as_string(fn);
 
 	auto form =
-		httplib::MultipartFormDataItems{//		httplib::MultipartFormDataProvider {"upload", reader, fn, mime_type}
-										httplib::MultipartFormData{"upload", content, fn, mime_type}};
+		httplib::MultipartFormDataItems{httplib::MultipartFormData{"upload", content, fn, mime_type}};
 
 	auto resp = client.Post("/tika/form", form);
 
 	if (!resp) {
-		spdlog::get("console")->debug("get_file_text(): request failed: {}", httplib::to_string(resp.error()));
+		spdlog::get("console")->debug("get_file_text(): could not reach tika, request failed: {}", httplib::to_string(resp.error()));
 		return "";
 	}
 
@@ -80,70 +123,9 @@ std::string get_file_text(const std::string& tika_host, int tika_port, const std
 	return resp->body;
 }
 
-std::vector<WorldcatBook> parse_worldcat_data(std::string worldcat_xml) {
-	pugi::xml_document doc;
-	pugi::xml_parse_result result = doc.load_string(worldcat_xml.c_str());
-
-	if (!result) {
-		spdlog::get("console")->debug("parse_worldcat_data(): could not parse XML:\n{}", worldcat_xml);
-		return {};
-	}
-
-	const auto classify = doc.child("classify");
-
-	if (!classify.child("work").empty()) {
-		const auto work = classify.child("work");
-
-		const auto author = work.attribute("author").value();
-		const auto title = work.attribute("title").value();
-		const auto lowYear = work.attribute("lyr").value();
-		const auto highYear = work.attribute("hyr").value();
-		return {WorldcatBook{author, title, lowYear, highYear}};
-	}
-
-	if (classify.child("works").empty()) {
-		spdlog::get("console")->debug("parse_worldcat_data(): worldcat had no result:\n{}", worldcat_xml);
-		return {};
-	}
-
-	std::vector<WorldcatBook> books{};
-
-	for (auto work : classify.child("works").children("work")) {
-		const auto author = work.attribute("author").value();
-		const auto title = work.attribute("title").value();
-		const auto lowYear = work.attribute("lyr").value();
-		const auto highYear = work.attribute("hyr").value();
-		books.emplace_back(author, title, lowYear, highYear);
-	}
-
-	spdlog::get("console")->debug("parse_worldcat_data(): book info {}", books.rbegin()->_title);
-
-	return books;
-}
-
-std::vector<WorldcatBook> get_by_isbn(const std::string& worldcat_host,
-									  const std::string& worldcat_path,
-									  int worldcat_port,
-									  std::string const& isbn) {
-	auto client = httplib::Client(worldcat_host, worldcat_port);
-
-	auto resp = client.Get(fmt::format("{}?isbn={}", worldcat_path, isbn));
-
-	if (!resp) {
-		spdlog::get("console")->debug("get_by_isbn(): request failed: {}", to_string(resp.error()));
-		return {};
-	}
-
-	if (resp->status != 200) {
-		spdlog::get("console")->debug("get_by_isbn(): could not request metadata for ISBN: {} status: {} path: {}",
-									  isbn, resp->status, resp->location);
-		return {};
-	}
-	return parse_worldcat_data(resp->body);
-}
-
-void process_file(const std::string& filepath, size_t max_chars, ThreadSafeFile& outJson, const json& filetypes, const API& api) {
-//	spdlog::get("console")->info("process_file(): working on {}", filepath);
+void process_file(
+	const std::string& filepath, size_t max_chars, Lockable<json>& output, const json& filetypes, const API& api) {
+	//	spdlog::get("console")->info("process_file(): working on {}", filepath);
 	const auto filetext = get_file_text(api.tika_host, api.tika_port, filepath, filetypes);
 	if (filetext.empty()) {
 		spdlog::get("console")->debug("process_file(): {} got no text", filepath);
@@ -157,48 +139,75 @@ void process_file(const std::string& filepath, size_t max_chars, ThreadSafeFile&
 		return;
 	}
 
-	std::vector<std::string> isbns{};
+	std::unordered_set<std::string> isbns{};
 	for (const auto& isbn : found_isbns) {
 		const auto result = is_valid_isbn(isbn);
 		bool is_valid = get<0>(result);
 		std::string cleaned_isbn = get<1>(result);
 		if (is_valid) {
-			isbns.push_back(cleaned_isbn);
+			isbns.insert(cleaned_isbn);
 		}
 	}
 
 	if (isbns.empty()) {
-		spdlog::get("console")->info("process_file(): {} no valid isbns", filepath);
+		spdlog::get("console")->info("process_file(): {} no valid ISBNs", filepath);
 		return;
 	}
 
-	std::string isbn;
-	if (isbns.size() > 1) {
-		// TODO: Add CLI option for selection
-		isbn = isbns.at(0);
-	} else {
-		isbn = isbns.at(0);
+	spdlog::get("console")->debug("process_file(): found {} valid ISBNs", isbns.size());
+
+	std::unordered_set<Book> books {};
+
+	for (const auto& isbn : isbns) {
+		auto newBooks = get_by_isbn(api.worldcat_host, api.worldcat_path, api.worldcat_port, isbn);
+
+		if (newBooks.empty()) {
+			spdlog::get("console")->debug("process_file(): WorldCat returned nothing for isbn: {}", isbn);
+			continue;
+		}
+
+		spdlog::get("console")->debug("process_file(): WorldCat found {} works for {}", newBooks.size(), isbn);
+
+		for (auto newBook : newBooks) {
+			newBook.isbn = isbn;
+			newBook.filepath = filepath;
+			books.insert(newBook);
+		}
 	}
 
-	auto worldcatBooks = get_by_isbn(api.worldcat_host, api.worldcat_path, api.worldcat_port, isbn);
-	if (worldcatBooks.empty()) {
-		spdlog::get("console")->debug("process_file(): {} worldcat returned nothing", filepath);
+	if (books.empty()) {
+		spdlog::get("console")->debug("process_file(): none of the ISBNs were found on WorldCat");
 		return;
 	}
 
-	WorldcatBook worldcatBook{};
-	if (worldcatBooks.size() > 1) {
-		// TODO: Add CLI option for selection
-		worldcatBook = worldcatBooks.at(0);
+	Book bestMatch;
+
+	if (books.size() > 1) {
+		bestMatch.lowYear = 0;
+		bestMatch.highYear = 0;
+		for (const auto& book : books) {
+			if (book.highYear > bestMatch.highYear) {
+				bestMatch = book;
+			} else if (book.highYear == bestMatch.highYear && book.lowYear > bestMatch.lowYear) {
+				bestMatch = book;
+			}
+		}
+		if (bestMatch.lowYear == 0 && bestMatch.highYear == 0) {
+			spdlog::get("console")->warn("process_file(): multiple books found on WorldCat for {} but could not find an obvious best choice, choosing random one", filepath);
+			bestMatch = *books.begin();
+		}
 	} else {
-		worldcatBook = worldcatBooks.at(0);
+		ASSERT(books.size() == 1);
+		bestMatch = *books.begin();
 	}
 
-	Book book{filepath, std::move(isbn), std::move(worldcatBook)};
+	ASSERT(!bestMatch.isbn.empty());
 
-	auto book_json = book.to_json();
+	auto book_json = bestMatch.to_json();
 
-	outJson.write(book_json.dump(4) + ",");
+	output.use([&book_json](json& out) {
+		out.push_back(book_json);
+	});
 
 	spdlog::get("console")->info("process_file(): successfully processed {}", filepath);
 }
@@ -227,14 +236,14 @@ int main(int argc, char* argv[]) {
 	bool debug = false;
 	bool verbose = false;
 	std::string inDirectory;
-	std::string outJson;
+	std::string outputJsonFilepath;
 	bool version = false;
 	std::string filetypesJsonPath;
 	std::string configFilepath;
 
 	auto cli =
 		clipp::group((clipp::required("-i", "--input") & clipp::value("input directory", inDirectory)),
-					 (clipp::required("-o", "--output") & clipp::value("output JSON file", outJson)),
+					 (clipp::required("-o", "--output") & clipp::value("output JSON file", outputJsonFilepath)),
 					 clipp::option("-d", "--debug").set(debug).doc("enable debug logging"),
 					 clipp::option("-v", "--verbose").set(verbose).doc("enable verbose logging"),
 					 clipp::option("--version").set(version).doc("print version and feature info"),
@@ -276,7 +285,7 @@ int main(int argc, char* argv[]) {
 	std::unordered_set<std::string> processed_files{};
 	json previousBooks;
 	try {
-		std::ifstream previousOutput(outJson);
+		std::ifstream previousOutput(outputJsonFilepath);
 		previousBooks = json::parse(previousOutput);
 		for (auto& previousBook : previousBooks) {
 			ASSERT(previousBook.is_object());
@@ -286,8 +295,7 @@ int main(int argc, char* argv[]) {
 	} catch (const std::exception& err) {
 	}
 
-	ThreadSafeFile outputJson{outJson};
-	outputJson.write("[\n");
+	Lockable<json> output{std::move(previousBooks)};
 
 	auto config = toml::parse_file(configFilepath);
 
@@ -314,16 +322,20 @@ int main(int argc, char* argv[]) {
 			spdlog::get("console")->info("skipping {} because it was processed on a previous run", filepath);
 			return;
 		}
-		process_file(filepath, static_cast<size_t>(max_chars), outputJson, filetypes, api);
+		process_file(filepath, static_cast<size_t>(max_chars), output, filetypes, api);
 	});
 	executor.run(taskflow).wait();
 
-	for (const auto& previousBook : previousBooks) {
-		outputJson.write(previousBook.dump(4) + ",");
-	}
+	output.use([&outputJsonFilepath](auto& out) {
+		if (out.empty()) {
+			return;
+		}
 
-	outputJson.step_back_one_char();
-	outputJson.write("\n]");
+		std::ofstream fh(outputJsonFilepath);
+		std::string str{out.dump(4)};
+		fh.write(str.data(), static_cast<long>(str.size()));
+		fh.close();
+	});
 
 	return 0;
 }
