@@ -59,3 +59,6 @@ scanner -f filetypes.json -c scanner.toml -i <input directory> -o books.json
 * [ ] Progress bar
 * [ ] Improve fuzzy matching on filenames/titles
 * [ ] Goodreads API
+
+### v0.4
+* [ ] Calibre compatible output
