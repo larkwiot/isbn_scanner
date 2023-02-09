@@ -25,6 +25,14 @@ cmake -S . --preset=Release
 cmake --build ./out/build/Release -j<cores>
 ```
 
+# Running Unit Tests
+
+```shell
+cmake -S . --preset=Test
+cmake --build ./out/build/Test -j<cores>
+./out/build/Test/scanner
+```
+
 # Setup
 
 ## Tika
@@ -50,8 +58,9 @@ scanner -f filetypes.json -c scanner.toml -i <input directory> -o books.json
 * [x] Add rate limiting
 
 ### v0.2
-* [ ] Unit Tests
+* [x] Unit Tests
 * [ ] Fuzz testing
+* [ ] Add installation to CMake
 * [ ] Changelog
 * [ ] Complete README documentation
 

@@ -24,6 +24,8 @@ limitations under the License.
 #include <spdlog/spdlog.h>
 #include <ctre.hpp>
 
+#include "test.hpp"
+
 #pragma once
 
 using ISBN = unsigned long;
@@ -90,6 +92,11 @@ constexpr int ctoi(char c) {
 		return res;
 	}
 	return res;
+}
+
+TEST_CASE("ctoi()") {
+	CHECK(ctoi('0') == 0);
+	CHECK(ctoi('9') == 9);
 }
 
 static std::unordered_set<char> filter_chars = {',', '.', '\'', '|', '-'};
@@ -206,6 +213,40 @@ tao::tuple<bool, ISBN> is_valid_isbn(std::string isbn) {
 	return tao::make_tuple(false, 0ul);
 }
 
+TEST_CASE("is_valid_isbn()") {
+	// valid ISBN10s
+	CHECK(get<0>(is_valid_isbn("0071466932")) == true);
+	CHECK(get<0>(is_valid_isbn("193176932X")) == true);
+	CHECK(get<0>(is_valid_isbn("052159104X")) == true);
+	CHECK(get<0>(is_valid_isbn("158113052X")) == true);
+	CHECK(get<0>(is_valid_isbn("8425507006")) == true);
+	CHECK(get<0>(is_valid_isbn("0534393217")) == true);
+
+	// invalid ISBN10s
+	CHECK(get<0>(is_valid_isbn("1931769329")) == false);
+	CHECK(get<0>(is_valid_isbn("1581130522")) == false);
+	CHECK(get<0>(is_valid_isbn("8425507005")) == false);
+	CHECK(get<0>(is_valid_isbn("053439XXXX")) == false);
+	CHECK(get<0>(is_valid_isbn("12389X9814")) == false);
+	CHECK(get<0>(is_valid_isbn("0000000000")) == false);
+	CHECK(get<0>(is_valid_isbn("1111111111")) == false);
+
+	// valid ISBN13s
+	CHECK(get<0>(is_valid_isbn("9780735682931")) == true);
+	CHECK(get<0>(is_valid_isbn("9780672328978")) == true);
+	CHECK(get<0>(is_valid_isbn("9781447123309")) == true);
+	CHECK(get<0>(is_valid_isbn("9780735682931")) == true);
+	CHECK(get<0>(is_valid_isbn("9780735682931")) == true);
+	CHECK(get<0>(is_valid_isbn("9781447123309")) == true);
+
+	// invalid ISBN13s
+	CHECK(get<0>(is_valid_isbn("978073568293X")) == false);
+	CHECK(get<0>(is_valid_isbn("9780672328928")) == false);
+	CHECK(get<0>(is_valid_isbn("9780735682932")) == false);
+	CHECK(get<0>(is_valid_isbn("9780735482931")) == false);
+	CHECK(get<0>(is_valid_isbn("9781447123308")) == false);
+}
+
 static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-\\s]+[0-9X])"};
 static constexpr auto file_extension_pattern = ctll::fixed_string{"\\.([^\\.]+)$"};
 
@@ -217,12 +258,23 @@ auto find_isbns(const std::string& text) {
 	return matches;
 }
 
+TEST_CASE("find_isbns()") {
+	auto result = find_isbns("007 14-66693       \t2");
+	CHECK(result.size() == 1);
+}
+
 std::string get_file_extension(const std::string& fn) {
 	auto match = ctre::search<file_extension_pattern>(fn);
 	if (match) {
 		return match.get<1>().to_string();
 	}
 	return "";
+}
+
+TEST_CASE("get_file_extension()") {
+	CHECK(get_file_extension("blah.pdf") == "pdf");
+	CHECK(get_file_extension("blah.......pdf") == "pdf");
+	CHECK(get_file_extension("blah    .pdf") == "pdf");
 }
 
 // https://rosettacode.org/wiki/Levenshtein_distance#C++
@@ -264,4 +316,8 @@ size_t levenshtein_distance(const std::string& a, const std::string& b) {
 	}
 
 	return costs[bLen];
+}
+
+TEST_CASE("levenshtein_distance()") {
+	CHECK(levenshtein_distance("rosettacode", "raisethysword") == 8);
 }

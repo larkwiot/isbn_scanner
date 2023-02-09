@@ -50,11 +50,8 @@
 #include "util.hpp"
 #include "version.hpp"
 #include "rate_limited.hpp"
+#include "test.hpp"
 
 #pragma once
 
 using json = nlohmann::json;
-
-enum class TransferMode {
-    MOVE, COPY, DRY_RUN
-};

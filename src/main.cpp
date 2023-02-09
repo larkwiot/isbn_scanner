@@ -285,6 +285,7 @@ std::string get_feature_string() {
 
 int signalReceived = -233;
 
+#ifdef ISBN_SCANNER_IMPLEMENT_MAIN
 int main(int argc, char* argv[]) {
 	auto console_log = spdlog::stdout_color_mt("console");
 	auto error_log = spdlog::stdout_color_mt("stderr");
@@ -376,10 +377,19 @@ int main(int argc, char* argv[]) {
 		if (filepath.is_directory()) {
 			continue;
 		}
-		auto ext = get_file_extension(filepath.path().string());
-		if (filetypes.contains(ext)) {
-			files.push_back(filepath.path());
+
+		const auto filepathString = filepath.path().string();
+		if (processed_files.contains(filepathString)) {
+			spdlog::get("console")->info("skipping {} because it was processed on a previous run", filepathString);
+			continue;
 		}
+
+		auto ext = get_file_extension(filepath.path().string());
+		if (!filetypes.contains(ext)) {
+			spdlog::get("console")->info("skipping {} because it does not have a supported file extension", filepathString);
+		}
+
+		files.push_back(filepath.path());
 	}
 
 	console_log->info("main(): {} files found", files.size());
@@ -408,13 +418,9 @@ int main(int argc, char* argv[]) {
 	tf::Executor executor{};
 	tf::Taskflow taskflow{};
 	taskflow.for_each(files.begin(), files.end(), [&](const auto& filepath) {
-	  if (signalReceived != -233) {
-		  spdlog::get("console")->debug("signal acknowledged, writing output file");
-		  output.use(writeOutputJson);
-		  return;
-	  }
-	  if (processed_files.contains(filepath)) {
-			spdlog::get("console")->info("skipping {} because it was processed on a previous run", filepath);
+		if (signalReceived != -233) {
+			spdlog::get("console")->debug("signal acknowledged, writing output file");
+			output.use(writeOutputJson);
 			return;
 		}
 		process_file(filepath, static_cast<size_t>(max_chars), output, filetypes, tika, worldCat);
@@ -425,3 +431,4 @@ int main(int argc, char* argv[]) {
 
 	return 0;
 }
+#endif
