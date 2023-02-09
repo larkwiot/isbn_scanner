@@ -26,6 +26,8 @@ limitations under the License.
 
 #pragma once
 
+using ISBN = unsigned long;
+
 std::vector<char> read_file_bytes(const std::string& fn) {
 	std::ifstream fh{fn, std::ios::binary | std::ios::ate};
 
@@ -114,17 +116,17 @@ const std::unordered_set<char> isbn_chars = {'0', '1', '2', '3', '4', '5', '6', 
 
 static constexpr auto all_one_char = ctll::fixed_string{"(.)\\1+"};
 
-tao::tuple<bool, std::string> is_valid_isbn(std::string isbn) {
+tao::tuple<bool, ISBN> is_valid_isbn(std::string isbn) {
 //	spdlog::get("console")->debug("is_valid_isbn(): raw ISBN: {}", isbn);
 
 	std::erase_if(isbn, [](char c) { return !isbn_chars.contains(c); });
 
 	if (ctre::match<all_one_char>(isbn)) {
-		return tao::make_tuple(false, std::string{});
+		return tao::make_tuple(false, 0ul);
 	}
 
 	if (isbn == "0123456789") {
-		return tao::make_tuple(false, std::string{});
+		return tao::make_tuple(false, 0ul);
 	}
 
 	if (isbn.length() == 10) {
@@ -146,7 +148,7 @@ tao::tuple<bool, std::string> is_valid_isbn(std::string isbn) {
 					sum += multiplier * 10;
 				} else {
 					spdlog::get("console")->debug("is_valid_isbn(): ISBN {} had X not at end", isbn);
-					return tao::tuple<bool, std::string>{false, ""};
+					return tao::make_tuple(false, 0ul);
 				}
 			} else {
 				sum += multiplier * ctoi(d);
@@ -156,13 +158,13 @@ tao::tuple<bool, std::string> is_valid_isbn(std::string isbn) {
 		}
 
 		if (sum % 11 == 0) {
-			return tao::make_tuple(true, isbn);
-			return tao::make_tuple(true, isbn);
+			return tao::make_tuple(true, std::stoul(isbn));
+			return tao::make_tuple(true, std::stoul(isbn));
 		}
 
 		spdlog::get("console")->debug("is_valid_isbn(): ISBN {} invalid ISBN 10 checksum", isbn);
 
-		return tao::make_tuple(false, std::string{});
+		return tao::make_tuple(false, 0ul);
 
 	} else if (isbn.length() == 13) {
 		spdlog::get("console")->debug("is_valid_isbn(): cleaned ISBN: {}", isbn);
@@ -173,7 +175,7 @@ tao::tuple<bool, std::string> is_valid_isbn(std::string isbn) {
 			check_digit = std::stoul(isbn.substr(12));
 		} catch (const std::invalid_argument& err) {
 			spdlog::get("console")->debug("ISBN {} cannot be converted to number", isbn.substr(12));
-			return tao::make_tuple(false, std::string{});
+			return tao::make_tuple(false, 0ul);
 		}
 		int multiplier = 1;
 		int sum = 0;
@@ -187,21 +189,21 @@ tao::tuple<bool, std::string> is_valid_isbn(std::string isbn) {
 		int remainder = sum % 10;
 
 		if (remainder == 0 && check_digit == 0) {
-			return tao::tuple<bool, std::string>{true, isbn};
+			return tao::make_tuple(true, std::stoul(isbn));
 		}
 
 		if (std::cmp_equal((10 - remainder), check_digit)) {
-			return tao::tuple<bool, std::string>{true, isbn};
+			return tao::make_tuple(true, std::stoul(isbn));
 		}
 
 		spdlog::get("console")->debug("is_valid_isbn(): ISBN {} invalid ISBN 13 checksum", isbn);
 
-		return tao::make_tuple(false, std::string{});
+		return tao::make_tuple(false, 0ul);
 	}
 
 //	spdlog::get("console")->debug("is_valid_isbn(): ISBN {} is not a valid length", isbn);
 
-	return tao::make_tuple(false, std::string{});
+	return tao::make_tuple(false, 0ul);
 }
 
 static constexpr auto isbn_pattern = ctll::fixed_string{"([0-9\\-\\s]+[0-9X])"};
@@ -221,4 +223,45 @@ std::string get_file_extension(const std::string& fn) {
 		return match.get<1>().to_string();
 	}
 	return "";
+}
+
+// https://rosettacode.org/wiki/Levenshtein_distance#C++
+size_t levenshtein_distance(const std::string& a, const std::string& b) {
+	const size_t aLen = a.size();
+	const size_t bLen = b.size();
+
+	if (aLen == 0) {
+		return bLen;
+	}
+
+	if (bLen == 0) {
+		return aLen;
+	}
+
+	std::vector<size_t> costs(bLen + 1);
+
+	std::iota(costs.begin(), costs.end(), 0);
+	size_t i = 0;
+	for (auto aChar : a) {
+		costs[0] = i + 1;
+		size_t corner = i;
+		size_t j = 0;
+		for (auto bChar : b) {
+			size_t upper = costs[j + 1];
+
+			if (aChar == bChar) {
+				costs[j + 1] = corner;
+			} else {
+				costs[j + 1] = 1 + std::min(std::min(upper, corner), costs[j]);
+			}
+
+			corner = upper;
+
+			++j;
+		}
+
+		++i;
+	}
+
+	return costs[bLen];
 }

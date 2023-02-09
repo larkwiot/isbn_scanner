@@ -14,23 +14,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-//#include <string>
-//#include <filesystem>
-//#include <fstream>
+// #include <string>
+// #include <filesystem>
+// #include <fstream>
+#include <functional>
 #include <mutex>
 #include <utility>
-#include <functional>
 
 #pragma once
 
 template <typename T>
 class Lockable {
-	std::mutex _mutex {};
+	std::mutex _mutex{};
 	T _item;
 
    public:
 	Lockable() = default;
-	explicit Lockable(T&& item) : _item(item) {};
+	explicit Lockable(T&& item) : _item(item) {
+		_mutex.unlock();
+	};
 	~Lockable() noexcept(false) {
 		_mutex.unlock();
 	};

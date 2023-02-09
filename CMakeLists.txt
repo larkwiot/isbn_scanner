@@ -5,7 +5,7 @@ project(ISBNScanner VERSION 0.1 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-add_executable(scanner src/main.cpp src/main.hpp src/book.hpp src/lockable.hpp)
+add_executable(scanner src/main.cpp src/main.hpp src/book.hpp src/lockable.hpp src/rate_limited.hpp)
 
 include(cmake/CPM.cmake)
 

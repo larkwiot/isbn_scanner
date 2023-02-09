@@ -15,7 +15,7 @@ Make sure you have CMake and Ninja installed.
 ## Binary Release
 
 ```shell
-yay -S libpugixml-dev
+yay -S libpugixml-dev mold
 ```
 
 ## Compiling from Source
@@ -45,8 +45,9 @@ scanner -f filetypes.json -c scanner.toml -i <input directory> -o books.json
 
 ## Roadmap
 
-* Goodreads API
-* Better handling of the output JSON file
-* Unit Tests
-* Better handling when there are multiple ISBNs
-* Add rate limiting
+* [x] Better handling of the output JSON file
+* [x] Add rate limiting
+* [ ] Unit Tests
+* [ ] Fuzz testing
+* [ ] Better handling when there are multiple ISBNs (fuzzy matching on filename)
+* [ ] Goodreads API

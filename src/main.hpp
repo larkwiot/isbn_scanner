@@ -20,6 +20,7 @@
 #include <map>
 #include <string>
 #include <unordered_set>
+#include <csignal>
 
 #include <assert.hpp>
 
@@ -38,6 +39,7 @@
 #include <taskflow.hpp>
 #include <unordered_set>
 #include <tao/tuple/tuple.hpp>
+#include <chrono>
 
 #define TOML_HEADER_ONLY 0
 #define TOML_IMPLEMENTATION
@@ -47,6 +49,7 @@
 #include "lockable.hpp"
 #include "util.hpp"
 #include "version.hpp"
+#include "rate_limited.hpp"
 
 #pragma once
 

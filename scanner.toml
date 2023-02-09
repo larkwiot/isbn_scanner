@@ -6,6 +6,7 @@ port = 9998
 host = "classify.oclc.org"
 port = 80
 path = "/classify2/Classify"
+rate_milliseconds = 1000
 
 [option]
 max_characters_to_search = 10000

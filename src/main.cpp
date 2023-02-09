@@ -16,12 +16,15 @@
 
 #include "main.hpp"
 
-struct API {
-	std::string tika_host;
-	int tika_port;
-	std::string worldcat_host;
-	std::string worldcat_path;
-	int worldcat_port;
+struct Host {
+	std::string host;
+	int port;
+};
+
+struct Tika : public Host {};
+
+struct WorldCat : public Host {
+	std::string path;
 };
 
 std::unordered_set<Book> parse_worldcat_data(const std::string& worldcat_xml) {
@@ -29,7 +32,7 @@ std::unordered_set<Book> parse_worldcat_data(const std::string& worldcat_xml) {
 	pugi::xml_parse_result result = doc.load_string(worldcat_xml.c_str());
 
 	if (!result) {
-		spdlog::get("console")->debug("parse_worldcat_data(): could not parse XML:\n{}", worldcat_xml);
+		spdlog::get("console")->warn("parse_worldcat_data(): could not parse XML:\n{}", worldcat_xml);
 		return {};
 	}
 
@@ -40,11 +43,31 @@ std::unordered_set<Book> parse_worldcat_data(const std::string& worldcat_xml) {
 
 		const auto author = work.attribute("author").value();
 		const auto title = work.attribute("title").value();
-		const auto lowYear = work.attribute("lyr").value();
-		const auto highYear = work.attribute("hyr").value();
+		auto lowYearStr = std::string{work.attribute("lyr").value()};
+		auto highYearStr = std::string{work.attribute("hyr").value()};
 
-		std::unordered_set<Book> book {};
-		book.emplace("", author, title, std::stol(lowYear), std::stol(highYear), "");
+		if (lowYearStr.empty()) {
+			lowYearStr = "0";
+		}
+
+		if (highYearStr.empty()) {
+			highYearStr = "0";
+		}
+
+		long lowYear = 0;
+		try {
+			lowYear = std::stol(lowYearStr);
+		} catch (const std::exception& err) {
+		}
+
+		long highYear = 0;
+		try {
+			highYear = std::stol(highYearStr);
+		} catch (const std::exception& err) {
+		}
+
+		std::unordered_set<Book> book{};
+		book.emplace(0ul, author, title, lowYear, highYear, "");
 		return book;
 	}
 
@@ -58,36 +81,62 @@ std::unordered_set<Book> parse_worldcat_data(const std::string& worldcat_xml) {
 	for (auto work : classify.child("works").children("work")) {
 		const auto author = work.attribute("author").value();
 		const auto title = work.attribute("title").value();
-		const auto lowYear = work.attribute("lyr").value();
-		const auto highYear = work.attribute("hyr").value();
-		books.emplace("", author, title, std::stol(lowYear), std::stol(highYear), "");
+		auto lowYearStr = std::string{work.attribute("lyr").value()};
+		auto highYearStr = std::string{work.attribute("hyr").value()};
+
+		if (lowYearStr.empty()) {
+			lowYearStr = "0";
+		}
+
+		if (highYearStr.empty()) {
+			highYearStr = "0";
+		}
+
+		long lowYear = 0;
+		try {
+			lowYear = std::stol(lowYearStr);
+		} catch (const std::exception& err) {
+		}
+
+		long highYear = 0;
+		try {
+			highYear = std::stol(highYearStr);
+		} catch (const std::exception& err) {
+		}
+
+		books.emplace(0ul, author, title, lowYear, highYear, "");
 	}
 
 	return books;
 }
 
-std::unordered_set<Book> get_by_isbn(const std::string& worldcat_host,
-									  const std::string& worldcat_path,
-									  int worldcat_port,
-									  const std::string& isbn) {
-	auto client = httplib::Client(worldcat_host, worldcat_port);
+std::unordered_set<Book> get_by_isbn(RateLimited<WorldCat, std::string>& rateWorldCat, ISBN isbn) {
+	auto requestWorldCat = [&isbn](WorldCat& worldCat) {
+		auto client = httplib::Client(worldCat.host, worldCat.port);
 
-	auto resp = client.Get(fmt::format("{}?isbn={}", worldcat_path, isbn));
+		auto resp = client.Get(fmt::format("{}?isbn={}", worldCat.path, isbn));
 
-	if (!resp) {
-		spdlog::get("console")->debug("get_by_isbn(): could not reach worldcat, request failed: {}", to_string(resp.error()));
-		return {};
-	}
+		if (!resp) {
+			spdlog::get("console")->warn("get_by_isbn(): could not reach worldcat, request failed: {}",
+										 to_string(resp.error()));
+			return std::string{""};
+		}
 
-	if (resp->status != 200) {
-		spdlog::get("console")->debug("get_by_isbn(): could not request metadata for ISBN: {} status: {} path: {}",
-									  isbn, resp->status, resp->location);
-		return {};
-	}
-	return parse_worldcat_data(resp->body);
+		if (resp->status != 200) {
+			spdlog::get("console")->warn("get_by_isbn(): could not request metadata for ISBN: {} status: {} path: {}",
+										 isbn, resp->status, resp->location);
+			return std::string{""};
+		}
+
+		return resp->body;
+	};
+
+	const auto body = rateWorldCat.use(requestWorldCat);
+
+	return parse_worldcat_data(body);
 }
 
-std::string get_file_text(const std::string& tika_host, int tika_port, const std::string& fn, const json& filetypes) {
+std::string get_file_text(const Tika& tika, const std::string& fn, const json& filetypes) {
 	auto ext = get_file_extension(fn);
 	if (ext.empty()) {
 		spdlog::get("console")->warn("skipping {} because it does not have a file extension", fn);
@@ -101,32 +150,36 @@ std::string get_file_text(const std::string& tika_host, int tika_port, const std
 
 	const auto mime_type = filetypes[ext].get<std::string>();
 
-	auto client = httplib::Client(tika_host, tika_port);
+	auto client = httplib::Client(tika.host, tika.port);
 
 	const auto content = read_file_bytes_as_string(fn);
 
-	auto form =
-		httplib::MultipartFormDataItems{httplib::MultipartFormData{"upload", content, fn, mime_type}};
+	auto form = httplib::MultipartFormDataItems{httplib::MultipartFormData{"upload", content, fn, mime_type}};
 
 	auto resp = client.Post("/tika/form", form);
 
 	if (!resp) {
-		spdlog::get("console")->debug("get_file_text(): could not reach tika, request failed: {}", httplib::to_string(resp.error()));
+		spdlog::get("console")->warn("get_file_text(): could not reach tika, request failed: {}",
+									 httplib::to_string(resp.error()));
 		return "";
 	}
 
 	if (resp->status != 200) {
-		spdlog::get("console")->debug("get_file_text(): could not get text for file: {}", fn);
+		spdlog::get("console")->warn("get_file_text(): could not get text for file, tika failed to process it: {}", fn);
 		return "";
 	}
 
 	return resp->body;
 }
 
-void process_file(
-	const std::string& filepath, size_t max_chars, Lockable<json>& output, const json& filetypes, const API& api) {
+void process_file(const std::string& filepath,
+				  size_t max_chars,
+				  Lockable<json>& output,
+				  const json& filetypes,
+				  const Tika& tika,
+				  RateLimited<WorldCat, std::string>& worldCat) {
 	//	spdlog::get("console")->info("process_file(): working on {}", filepath);
-	const auto filetext = get_file_text(api.tika_host, api.tika_port, filepath, filetypes);
+	const auto filetext = get_file_text(tika, filepath, filetypes);
 	if (filetext.empty()) {
 		spdlog::get("console")->debug("process_file(): {} got no text", filepath);
 		return;
@@ -139,27 +192,27 @@ void process_file(
 		return;
 	}
 
-	std::unordered_set<std::string> isbns{};
+	std::unordered_set<ISBN> isbns{};
 	for (const auto& isbn : found_isbns) {
 		const auto result = is_valid_isbn(isbn);
 		bool is_valid = get<0>(result);
-		std::string cleaned_isbn = get<1>(result);
+		ISBN cleaned_isbn = get<1>(result);
 		if (is_valid) {
 			isbns.insert(cleaned_isbn);
 		}
 	}
 
 	if (isbns.empty()) {
-		spdlog::get("console")->info("process_file(): {} no valid ISBNs", filepath);
+		spdlog::get("console")->debug("process_file(): {} no valid ISBNs", filepath);
 		return;
 	}
 
 	spdlog::get("console")->debug("process_file(): found {} valid ISBNs", isbns.size());
 
-	std::unordered_set<Book> books {};
+	std::unordered_set<Book> books{};
 
-	for (const auto& isbn : isbns) {
-		auto newBooks = get_by_isbn(api.worldcat_host, api.worldcat_path, api.worldcat_port, isbn);
+	for (ISBN isbn : isbns) {
+		auto newBooks = get_by_isbn(worldCat, isbn);
 
 		if (newBooks.empty()) {
 			spdlog::get("console")->debug("process_file(): WorldCat returned nothing for isbn: {}", isbn);
@@ -180,30 +233,32 @@ void process_file(
 		return;
 	}
 
+	spdlog::get("console")->debug("process_file(): found {} total works", books.size());
+
 	Book bestMatch;
 
 	if (books.size() > 1) {
-		bestMatch.lowYear = 0;
-		bestMatch.highYear = 0;
+		const std::string filename = std::filesystem::path(filepath).filename().string();
+		std::unordered_map<size_t, std::string> levDists{};
+		size_t lowestDist = 999999999999999;
+
 		for (const auto& book : books) {
-			if (book.highYear > bestMatch.highYear) {
-				bestMatch = book;
-			} else if (book.highYear == bestMatch.highYear && book.lowYear > bestMatch.lowYear) {
+			ASSERT(!book.title.empty());
+			size_t dist = levenshtein_distance(book.title, filename);
+			if (dist < lowestDist) {
 				bestMatch = book;
 			}
-		}
-		if (bestMatch.lowYear == 0 && bestMatch.highYear == 0) {
-			spdlog::get("console")->warn("process_file(): multiple books found on WorldCat for {} but could not find an obvious best choice, choosing random one", filepath);
-			bestMatch = *books.begin();
 		}
 	} else {
 		ASSERT(books.size() == 1);
 		bestMatch = *books.begin();
 	}
 
-	ASSERT(!bestMatch.isbn.empty());
+	ASSERT(bestMatch.isbn != 0ul);
 
 	auto book_json = bestMatch.to_json();
+
+	spdlog::get("console")->debug("process_file(): adding {} to JSON output", filepath);
 
 	output.use([&book_json](json& out) {
 		out.push_back(book_json);
@@ -227,6 +282,8 @@ std::string get_feature_string() {
 #endif
 	return fmt::format("Features: {} build", build);
 }
+
+int signalReceived = -233;
 
 int main(int argc, char* argv[]) {
 	auto console_log = spdlog::stdout_color_mt("console");
@@ -295,8 +352,6 @@ int main(int argc, char* argv[]) {
 	} catch (const std::exception& err) {
 	}
 
-	Lockable<json> output{std::move(previousBooks)};
-
 	auto config = toml::parse_file(configFilepath);
 
 	auto max_chars = config["option"]["max_characters_to_search"].value<long>().value();
@@ -304,29 +359,32 @@ int main(int argc, char* argv[]) {
 
 	auto tika_host = config["tika"]["host"].value<std::string>();
 	auto tika_port = config["tika"]["port"].value<int>();
-	auto worldcat_host = config["worldcat"]["host"].value<std::string>();
-	auto worldcat_path = config["worldcat"]["path"].value<std::string>();
-	auto worldcat_port = config["worldcat"]["port"].value<int>();
+	const Tika tika{tika_host.value(), tika_port.value()};
 
-	API api{tika_host.value(), tika_port.value(), worldcat_host.value(), worldcat_path.value(), worldcat_port.value()};
+	auto worldcat_host = config["worldcat"]["host"].value<std::string>();
+	auto worldcat_port = config["worldcat"]["port"].value<int>();
+	auto worldcat_path = config["worldcat"]["path"].value<std::string>();
+	auto worldcat_rate = config["worldcat"]["rate_milliseconds"].value<int>();
+	WorldCat worldCatInfo{{worldcat_host.value(), worldcat_port.value()}, worldcat_path.value()};
+	RateLimited<WorldCat, std::string> worldCat{std::move(worldCatInfo),
+												std::chrono::milliseconds(worldcat_rate.value())};
+
+	console_log->info("main(): gathering files...");
 
 	auto files = std::vector<std::string>{};
-	for (auto& filepath : std::filesystem::directory_iterator(inDirectory)) {
-		files.push_back(filepath.path());
+	for (const auto& filepath : std::filesystem::recursive_directory_iterator(inDirectory)) {
+		if (filepath.is_directory()) {
+			continue;
+		}
+		auto ext = get_file_extension(filepath.path().string());
+		if (filetypes.contains(ext)) {
+			files.push_back(filepath.path());
+		}
 	}
 
-	tf::Executor executor{};
-	tf::Taskflow taskflow{};
-	taskflow.for_each(files.begin(), files.end(), [&](const auto& filepath) {
-		if (processed_files.contains(filepath)) {
-			spdlog::get("console")->info("skipping {} because it was processed on a previous run", filepath);
-			return;
-		}
-		process_file(filepath, static_cast<size_t>(max_chars), output, filetypes, api);
-	});
-	executor.run(taskflow).wait();
+	console_log->info("main(): {} files found", files.size());
 
-	output.use([&outputJsonFilepath](auto& out) {
+	auto writeOutputJson = [&outputJsonFilepath](auto& out) {
 		if (out.empty()) {
 			return;
 		}
@@ -335,7 +393,35 @@ int main(int argc, char* argv[]) {
 		std::string str{out.dump(4)};
 		fh.write(str.data(), static_cast<long>(str.size()));
 		fh.close();
+	};
+
+	Lockable<json> output{std::move(previousBooks)};
+
+	auto handler = [](int signalNum) {
+		spdlog::get("console")->debug("signal {} received", signalNum);
+		signalReceived = signalNum;
+	};
+	std::signal(SIGINT, handler);
+
+	spdlog::get("console")->info("main(): beginning scanning");
+
+	tf::Executor executor{};
+	tf::Taskflow taskflow{};
+	taskflow.for_each(files.begin(), files.end(), [&](const auto& filepath) {
+	  if (signalReceived != -233) {
+		  spdlog::get("console")->debug("signal acknowledged, writing output file");
+		  output.use(writeOutputJson);
+		  return;
+	  }
+	  if (processed_files.contains(filepath)) {
+			spdlog::get("console")->info("skipping {} because it was processed on a previous run", filepath);
+			return;
+		}
+		process_file(filepath, static_cast<size_t>(max_chars), output, filetypes, tika, worldCat);
 	});
+	executor.run(taskflow).wait();
+
+	output.use(writeOutputJson);
 
 	return 0;
 }

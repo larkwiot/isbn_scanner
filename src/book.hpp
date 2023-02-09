@@ -22,7 +22,7 @@ limitations under the License.
 using json = nlohmann::json;
 
 struct Book {
-	std::string isbn;
+	unsigned long isbn;
 	std::string author;
 	std::string title;
 	long lowYear{};
@@ -30,7 +30,7 @@ struct Book {
 	std::string filepath;
 
 	Book() = default;
-	explicit Book(std::string&& _isbn,
+	explicit Book(unsigned long _isbn,
 				  std::string&& _author,
 				  std::string&& _title,
 				  long _lowYear,
