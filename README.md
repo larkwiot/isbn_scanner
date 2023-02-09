@@ -45,9 +45,17 @@ scanner -f filetypes.json -c scanner.toml -i <input directory> -o books.json
 
 ## Roadmap
 
+### v0.1
 * [x] Better handling of the output JSON file
 * [x] Add rate limiting
+
+### v0.2
 * [ ] Unit Tests
 * [ ] Fuzz testing
-* [ ] Better handling when there are multiple ISBNs (fuzzy matching on filename)
+* [ ] Changelog
+* [ ] Complete README documentation
+
+### v0.3
+* [ ] Progress bar
+* [ ] Improve fuzzy matching on filenames/titles
 * [ ] Goodreads API
